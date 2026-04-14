@@ -5,6 +5,7 @@ from sqlalchemy import MetaData, String, DateTime, SmallInteger, Column
 from datetime import datetime
 import uuid
 
+
 class Base(DeclarativeBase):
     metadata = MetaData(
         naming_convention={
@@ -23,9 +24,19 @@ class BaseModel(Base):
     __abstract__ = True
 
     id = Column(String(100), primary_key=True, default=lambda: str(uuid.uuid4()))
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-    is_deleted = Column(SmallInteger, default=0, comment="是否删除(0: 正常, 1: 删除)")
+    created_at = Column(
+        DateTime, default=datetime.now, nullable=False, comment="创建时间"
+    )
+    updated_at = Column(
+        DateTime,
+        default=datetime.now,
+        onupdate=datetime.now,
+        nullable=False,
+        comment="更新时间",
+    )
+    is_deleted = Column(
+        SmallInteger, default=0, nullable=False, comment="是否删除(0: 正常, 1: 删除)"
+    )
 
 
 # 创建异步数据库引擎，使用配置中的 DATABASE_URL

@@ -7,9 +7,10 @@ export interface LoginParams {
 
 export interface RegisterParams {
   username: string
+  phone: string
+  smsCode: string
   password: string
   confirmPassword: string
-  email: string
 }
 
 export interface AuthResponse {
@@ -23,4 +24,8 @@ export function login(data: LoginParams) {
 
 export function register(data: RegisterParams) {
   return request.post<AuthResponse>('/auth/register', data)
+}
+
+export function sendSmsCode(phone: string) {
+  return request.post('/auth/sms-code', { phone })
 }

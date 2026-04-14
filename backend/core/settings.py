@@ -18,6 +18,20 @@ class Settings(BaseSettings):
     POSTGRES_PASSWORD: str
     POSTGRES_DB: str
 
+    # 阿里云配置
+    ALIYUN_ACCESS_KEY: str
+    ALIYUN_SECRET_KEY: str
+    SMS_SIGN_NAME: str
+    SMS_TEMPLATE_CODE: str
+
+    # Redis配置
+    REDIS_HOST: str
+    REDIS_PORT: int = 6379
+    REDIS_PASSWORD: str
+    REDIS_DB: int = 0
+    REDIS_KEY_PREFIX: str
+    REDIS_DEFAULT_TTL: int
+
     # 构建异步数据库 URL
     @computed_field
     @property
@@ -39,6 +53,7 @@ class Settings(BaseSettings):
 
 def get_settings():
     return Settings()
+
 
 env_settings = EnvSettings()
 settings = get_settings()

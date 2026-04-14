@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
+import { ref, reactive, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage, type FormInst, type FormRules, type FormItemRule } from 'naive-ui'
 import {
@@ -9,16 +9,20 @@ import {
   NButton,
   NSpace,
 } from 'naive-ui'
-import { register, type RegisterParams } from '@/api/auth'
+import { register, sendSmsCode, type RegisterParams } from '@/api/auth'
 
 const router = useRouter()
 const message = useMessage()
 const formRef = ref<FormInst | null>(null)
 const loading = ref(false)
+const smsLoading = ref(false)
+const smsCooldown = ref(0)
+let cooldownTimer: ReturnType<typeof setInterval> | null = null
 
 const formData = reactive<RegisterParams>({
   username: '',
-  email: '',
+  phone: '',
+  smsCode: '',
   password: '',
   confirmPassword: '',
 })
@@ -27,14 +31,22 @@ function validatePasswordSame(_rule: FormItemRule, value: string): boolean {
   return value === formData.password
 }
 
+function validatePhone(_rule: FormItemRule, value: string): boolean {
+  return /^1[3-9]\d{9}$/.test(value)
+}
+
 const rules: FormRules = {
   username: [
     { required: true, message: '请输入用户名', trigger: 'blur' },
     { min: 3, max: 20, message: '用户名长度为 3-20 个字符', trigger: 'blur' },
   ],
-  email: [
-    { required: true, message: '请输入邮箱地址', trigger: 'blur' },
-    { type: 'email', message: '请输入有效的邮箱地址', trigger: 'blur' },
+  phone: [
+    { required: true, message: '请输入手机号', trigger: 'blur' },
+    { validator: validatePhone, message: '请输入有效的手机号', trigger: 'blur' },
+  ],
+  smsCode: [
+    { required: true, message: '请输入短信验证码', trigger: 'blur' },
+    { len: 6, message: '验证码为 6 位数字', trigger: 'blur' },
   ],
   password: [
     { required: true, message: '请输入密码', trigger: 'blur' },
@@ -48,6 +60,38 @@ const rules: FormRules = {
       trigger: 'blur',
     },
   ],
+}
+
+function startCooldown() {
+  smsCooldown.value = 60
+  cooldownTimer = setInterval(() => {
+    smsCooldown.value--
+    if (smsCooldown.value <= 0) {
+      clearInterval(cooldownTimer!)
+      cooldownTimer = null
+    }
+  }, 1000)
+}
+
+async function handleSendSms() {
+  if (smsCooldown.value > 0 || smsLoading.value) return
+
+  try {
+    await formRef.value?.validate(undefined, (rule) => rule?.key === 'phone')
+  } catch {
+    return
+  }
+
+  smsLoading.value = true
+  try {
+    await sendSmsCode(formData.phone)
+    message.success('验证码已发送')
+    startCooldown()
+  } catch {
+    message.error('验证码发送失败，请稍后重试')
+  } finally {
+    smsLoading.value = false
+  }
 }
 
 async function handleRegister() {
@@ -72,6 +116,10 @@ async function handleRegister() {
 function goLogin() {
   router.push('/login')
 }
+
+onUnmounted(() => {
+  if (cooldownTimer) clearInterval(cooldownTimer)
+})
 </script>
 
 <template>
@@ -108,16 +156,34 @@ function goLogin() {
               </NInput>
             </NFormItem>
 
-            <NFormItem path="email" :show-label="false">
-              <NInput v-model:value="formData.email" placeholder="请输入邮箱地址">
+            <NFormItem path="phone" :show-label="false">
+              <NInput v-model:value="formData.phone" placeholder="请输入手机号" maxlength="11">
                 <template #prefix>
                   <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
-                    <polyline points="22,6 12,13 2,6" />
+                    <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
+                    <line x1="12" y1="18" x2="12.01" y2="18" />
                   </svg>
                 </template>
               </NInput>
+            </NFormItem>
+
+            <NFormItem path="smsCode" :show-label="false">
+              <div class="sms-code-row">
+                <NInput v-model:value="formData.smsCode" placeholder="请输入短信验证码" maxlength="6"
+                  class="sms-code-input">
+                  <template #prefix>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                    </svg>
+                  </template>
+                </NInput>
+                <NButton :disabled="smsCooldown > 0" :loading="smsLoading" class="sms-btn"
+                  @click="handleSendSms">
+                  {{ smsCooldown > 0 ? `${smsCooldown}s` : '获取验证码' }}
+                </NButton>
+              </div>
             </NFormItem>
 
             <NFormItem path="password" :show-label="false">
@@ -286,6 +352,23 @@ function goLogin() {
   :deep(.n-input__prefix) {
     color: @text-placeholder;
     margin-right: 8px;
+  }
+}
+
+.sms-code-row {
+  display: flex;
+  width: 100%;
+  gap: 10px;
+
+  .sms-code-input {
+    flex: 1;
+  }
+
+  .sms-btn {
+    flex-shrink: 0;
+    height: 44px;
+    min-width: 110px;
+    font-size: 13px;
   }
 }
 

@@ -5,26 +5,26 @@ from db.session import BaseModel
 class User(BaseModel):
     __tablename__ = "user"
 
-    username = Column(String(50), unique=True, index=True, comment="用户名")
+    username = Column(String(50), unique=True, index=True, comment="用户名", nullable=False)
 
-    nickname = Column(String(50), comment="昵称")
+    nickname = Column(String(50), nullable=True, comment="昵称")
 
-    phone = Column(String(11), comment="手机号")
+    phone = Column(String(11), comment="手机号", nullable=False)
 
-    hashed_password = Column(String(100), comment="加密后的密码")
+    hashed_password = Column(String(100), comment="加密后的密码", nullable=False)
 
     is_active = Column(
         SmallInteger,
-        default=True,
+        default=1,
         comment="	是否活跃 (1: 正常/活跃, 0: 禁用/不活跃)",
+        nullable=False,
     )
 
-    role_id = Column(String(100), comment="角色ID")
+    role_id = Column(String(100), comment="角色ID", nullable=False)
 
 
 class UserRole(BaseModel):
     __tablename__ = "user_role"
-    user_id = Column(String(100), comment="用户ID")
 
     role_name = Column(String(100), default="运行人员", comment="角色名称")
 

@@ -1,0 +1,9 @@
+backend/__pycache__/
+backend/*.pyc
+backend/.env.dev
+backend/.env.prod
+backend/.env.current
+backend/.idea
+backend/.vscode
+backend/.pytest_cache
+backend/.ruff_cache
