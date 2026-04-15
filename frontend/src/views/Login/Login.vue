@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
-import { useRouter } from 'vue-router'
-import { useMessage, type FormInst, type FormRules } from 'naive-ui'
+import { useRouter, useRoute } from 'vue-router'
+import { useMessage, type FormInst, type FormRules, type FormItemRule } from 'naive-ui'
 import {
   NForm,
   NFormItem,
@@ -11,24 +11,34 @@ import {
   NSpace,
 } from 'naive-ui'
 import { useUserStore } from '@/stores/user'
-import { login, type LoginParams } from '@/api/users'
+import { login } from '@/api/users'
 
 const router = useRouter()
+const route = useRoute()
 const message = useMessage()
 const userStore = useUserStore()
 const formRef = ref<FormInst | null>(null)
 const loading = ref(false)
 const rememberMe = ref(false)
 
-const formData = reactive<LoginParams>({
-  username: '',
+interface LoginFormData {
+  phone: string
+  password: string
+}
+
+const formData = reactive<LoginFormData>({
+  phone: '',
   password: '',
 })
 
+function validatePhone(_rule: FormItemRule, value: string): boolean {
+  return /^1[3-9]\d{9}$/.test(value)
+}
+
 const rules: FormRules = {
-  username: [
-    { required: true, message: '请输入用户名', trigger: 'blur' },
-    { min: 3, max: 20, message: '用户名长度为 3-20 个字符', trigger: 'blur' },
+  phone: [
+    { required: true, message: '请输入手机号', trigger: 'blur' },
+    { validator: validatePhone, message: '请输入有效的手机号', trigger: 'blur' },
   ],
   password: [
     { required: true, message: '请输入密码', trigger: 'blur' },
@@ -44,17 +54,18 @@ async function handleLogin() {
   }
 
   loading.value = true
-  try {
-    const res = await login(formData) as any
-    userStore.setToken(res.token)
-    userStore.setUsername(res.username)
-    message.success('登录成功')
-    router.push('/')
-  } catch {
-    message.error('登录失败，请检查用户名和密码')
-  } finally {
+  const res = await login(formData as any) as any
+  if (res.code !== 200) {
     loading.value = false
+    message.error(res.message)
+    return
   }
+  userStore.setToken(res.data.access_token)
+  userStore.setUsername(res.data.user.username)
+  message.success('登录成功')
+  const redirect = (route.query.redirect as string) || '/'
+  router.push(redirect)
+
 }
 
 function goRegister() {
@@ -97,13 +108,13 @@ function goRegister() {
           <p class="form-subtitle">登录您的账户以继续使用</p>
 
           <NForm ref="formRef" :model="formData" :rules="rules" label-placement="left" size="large" class="login-form">
-            <NFormItem path="username" :show-label="false">
-              <NInput v-model:value="formData.username" placeholder="请输入用户名" @keyup.enter="handleLogin">
+            <NFormItem path="phone" :show-label="false">
+              <NInput v-model:value="formData.phone" placeholder="请输入手机号" maxlength="11" @keyup.enter="handleLogin">
                 <template #prefix>
                   <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-                    <circle cx="12" cy="7" r="4" />
+                    <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
+                    <line x1="12" y1="18" x2="12.01" y2="18" />
                   </svg>
                 </template>
               </NInput>

@@ -14,7 +14,7 @@ import {
   NSpace,
 } from 'naive-ui'
 // 引入注册和发送短信验证码的 API 以及参数类型
-import { register, sendVerificationCode, type RegisterParams } from '../api/users'
+import { register, sendVerificationCode, type RegisterParams } from '@/api/users'
 
 // 获取路由实例
 const router = useRouter()
@@ -129,7 +129,7 @@ async function handleRegister() {
   // 显示注册加载动画
   loading.value = true
   const res = await register(formData) as any
-  if (res.success) {
+  if (res.code === 200) {
     loading.value = false
     message.success('注册成功，请登录')
     router.push('/login')

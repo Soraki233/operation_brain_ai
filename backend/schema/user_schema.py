@@ -26,6 +26,17 @@ class CreateUserRoleSchema(BaseModel):
     role_key: str = Field(default="staff", description="角色权限字符串")
 
 
+class UserResponseSchema(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: str
+    username: str
+    phone: str
+    nickname: str | None = None
+    is_active: int
+    role_id: str
+
+
 class SendCodeSchema(BaseModel):
     phone: str = Field(..., description="手机号")
 
@@ -35,3 +46,15 @@ class SendCodeSchema(BaseModel):
         if not re.match(PHONE_REGEX, v):
             raise ValueError("手机号格式不正确")
         return v
+
+
+class LoginRequestSchema(BaseModel):
+    phone: str = Field(..., description="手机号")
+    password: str = Field(..., min_length=6, max_length=32, description="密码")
+
+
+
+class TokenResponseSchema(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponseSchema

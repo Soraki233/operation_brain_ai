@@ -28,11 +28,23 @@ class UsersRepo:
     # 创建用户
     @staticmethod
     async def create_user(user_data: UserRegisterSchema, db: AsyncSession) -> UserModel:
+
+        # 获取角色为staff的角色ID
+        staff_role = await UsersRepo.get_role_by_key("staff", db)
+        # 如果角色不存在，则创建角色
+        if not staff_role:
+            # 创建角色
+            create_user_role_data = CreateUserRoleSchema(
+                role_name="运行人员", role_key="staff"
+            )
+            # 创建角色
+            staff_role = await UsersRepo.create_user_role(create_user_role_data, db)
+            # 设置用户角色ID
         user = UserModel(
             phone=user_data.phone,
             username=user_data.username,
             hashed_password=get_password_hash(user_data.password),
-            verification_code=user_data.verification_code,
+            role_id=staff_role.id,
         )
         db.add(user)
         await db.commit()

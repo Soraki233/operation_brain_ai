@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     REDIS_KEY_PREFIX: str
     REDIS_DEFAULT_TTL: int
 
+    # Token相关
+    JWT_SECRET_KEY: str
+    JWT_ALGORITHM: str
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int
+
     # 构建异步数据库 URL
     @computed_field
     @property
