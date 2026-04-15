@@ -11,7 +11,7 @@ import {
   NSpace,
 } from 'naive-ui'
 import { useUserStore } from '@/stores/user'
-import { login, type LoginParams } from '@/api/auth'
+import { login, type LoginParams } from '@/api/users'
 
 const router = useRouter()
 const message = useMessage()

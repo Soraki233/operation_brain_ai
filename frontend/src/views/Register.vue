@@ -1,7 +1,11 @@
 <script setup lang="ts">
+// 引入 Vue 相关 API
 import { ref, reactive, onUnmounted } from 'vue'
+// 引入 Vue Router 导航 API
 import { useRouter } from 'vue-router'
+// 引入 Naive UI 的表单相关类型和消息提示 Hook
 import { useMessage, type FormInst, type FormRules, type FormItemRule } from 'naive-ui'
+// 引入 Naive UI 的表单和输入相关组件
 import {
   NForm,
   NFormItem,
@@ -9,42 +13,54 @@ import {
   NButton,
   NSpace,
 } from 'naive-ui'
-import { register, sendSmsCode, type RegisterParams } from '@/api/auth'
+// 引入注册和发送短信验证码的 API 以及参数类型
+import { register, sendVerificationCode, type RegisterParams } from '../api/users'
 
+// 获取路由实例
 const router = useRouter()
+// 获取消息提示实例
 const message = useMessage()
+// 表单实例引用
 const formRef = ref<FormInst | null>(null)
+// 注册按钮加载状态
 const loading = ref(false)
+// 发送短信验证码按钮加载状态
 const smsLoading = ref(false)
+// 短信验证码冷却倒计时
 const smsCooldown = ref(0)
+// 冷却定时器
 let cooldownTimer: ReturnType<typeof setInterval> | null = null
 
+// 注册表单数据
 const formData = reactive<RegisterParams>({
-  username: '',
-  phone: '',
-  smsCode: '',
-  password: '',
-  confirmPassword: '',
+  username: '',           // 用户名
+  phone: '',              // 手机号
+  verificationCode: '',            // 短信验证码
+  password: '',           // 密码
+  confirmPassword: '',    // 确认密码
 })
 
+// 校验：确认密码与密码一致
 function validatePasswordSame(_rule: FormItemRule, value: string): boolean {
   return value === formData.password
 }
 
+// 校验：手机号格式
 function validatePhone(_rule: FormItemRule, value: string): boolean {
   return /^1[3-9]\d{9}$/.test(value)
 }
 
+// 表单校验规则
 const rules: FormRules = {
   username: [
     { required: true, message: '请输入用户名', trigger: 'blur' },
     { min: 3, max: 20, message: '用户名长度为 3-20 个字符', trigger: 'blur' },
   ],
   phone: [
-    { required: true, message: '请输入手机号', trigger: 'blur' },
-    { validator: validatePhone, message: '请输入有效的手机号', trigger: 'blur' },
+    { key: 'phone', required: true, message: '请输入手机号', trigger: 'blur' },
+    { key: 'phone', validator: validatePhone, message: '请输入有效的手机号', trigger: 'blur' },
   ],
-  smsCode: [
+  verificationCode: [
     { required: true, message: '请输入短信验证码', trigger: 'blur' },
     { len: 6, message: '验证码为 6 位数字', trigger: 'blur' },
   ],
@@ -62,6 +78,7 @@ const rules: FormRules = {
   ],
 }
 
+// 启动短信验证码冷却倒计时（秒）
 function startCooldown() {
   smsCooldown.value = 60
   cooldownTimer = setInterval(() => {
@@ -73,50 +90,62 @@ function startCooldown() {
   }, 1000)
 }
 
+// 处理发送短信验证码逻辑
 async function handleSendSms() {
+  // 如果处于冷却或正在请求，直接返回
   if (smsCooldown.value > 0 || smsLoading.value) return
 
+  // 校验手机号字段
   try {
     await formRef.value?.validate(undefined, (rule) => rule?.key === 'phone')
   } catch {
+    message.error('请输入有效的手机号')
     return
   }
 
+  // 发送验证码中
   smsLoading.value = true
-  try {
-    await sendSmsCode(formData.phone)
+  const resp = await sendVerificationCode(formData.phone)
+  if (resp.code === 200) {
     message.success('验证码已发送')
-    startCooldown()
-  } catch {
-    message.error('验证码发送失败，请稍后重试')
-  } finally {
     smsLoading.value = false
+    startCooldown()
+  } else {
+    smsLoading.value = false
+    startCooldown()
+    message.error('验证码发送失败，请稍后重试')
   }
 }
 
+// 处理注册按钮点击逻辑
 async function handleRegister() {
+  // 表单校验失败直接返回
   try {
     await formRef.value?.validate()
   } catch {
     return
   }
 
+  // 显示注册加载动画
   loading.value = true
-  try {
-    await register(formData)
+  const res = await register(formData) as any
+  if (res.success) {
+    loading.value = false
     message.success('注册成功，请登录')
     router.push('/login')
-  } catch {
-    message.error('注册失败，请稍后重试')
-  } finally {
+  } else {
     loading.value = false
+    message.error(res.message)
   }
+
 }
 
+// 跳转到登录页面
 function goLogin() {
   router.push('/login')
 }
 
+// 组件卸载时清除短信冷却定时器
 onUnmounted(() => {
   if (cooldownTimer) clearInterval(cooldownTimer)
 })
@@ -168,10 +197,9 @@ onUnmounted(() => {
               </NInput>
             </NFormItem>
 
-            <NFormItem path="smsCode" :show-label="false">
+            <NFormItem path="verificationCode" :show-label="false">
               <div class="sms-code-row">
-                <NInput v-model:value="formData.smsCode" placeholder="请输入短信验证码" maxlength="6"
-                  class="sms-code-input">
+                <NInput v-model:value="formData.verificationCode" placeholder="请输入短信验证码" maxlength="6" class="sms-code-input">
                   <template #prefix>
                     <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
                       stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -179,8 +207,7 @@ onUnmounted(() => {
                     </svg>
                   </template>
                 </NInput>
-                <NButton :disabled="smsCooldown > 0" :loading="smsLoading" class="sms-btn"
-                  @click="handleSendSms">
+                <NButton :disabled="smsCooldown > 0" :loading="smsLoading" class="sms-btn" @click="handleSendSms">
                   {{ smsCooldown > 0 ? `${smsCooldown}s` : '获取验证码' }}
                 </NButton>
               </div>

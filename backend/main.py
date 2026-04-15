@@ -7,7 +7,13 @@ from router.users_router import router as users_router
 from core.redis import redis_manager
 from repository.users_repo import UsersRepo
 from db.session import AsyncSession
-
+from core.exception_handler import (
+    http_exception_handler,
+    validation_exception_handler,
+    global_exception_handler,
+)
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 # 在fastAPI启动时，创建数据库表，app.on_event已弃用
 @asynccontextmanager
@@ -21,6 +27,11 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan, dependencies=[Depends(get_db)])
+
+app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(Exception, global_exception_handler)
+
 # 允许跨域
 app.add_middleware(
     CORSMiddleware,

@@ -1,11 +1,13 @@
+from typing import Dict
 from db.session import AsyncSession
 from db.models import User as UserModel, UserRole as UserRoleModel
 from sqlalchemy import select
-from schema.user_schema import UserRegisterSchema
+from schema.user_schema import UserRegisterSchema, CreateUserRoleSchema
 from core.security import get_password_hash
 from core.redis import redis_manager
 import random
 from service.sms_service import AliyunSmsService
+from core.reponse import success_response, error_response
 
 
 class UsersRepo:
@@ -39,29 +41,67 @@ class UsersRepo:
 
     # 创建用户角色
     @staticmethod
-    async def create_user_role(db: AsyncSession) -> UserRoleModel:
+    async def create_user_role(
+        user_role_data: CreateUserRoleSchema, db: AsyncSession
+    ) -> UserRoleModel:
+        # 验证角色是否存在
+        is_role_exists_key = await UsersRepo.get_role_by_key(
+            user_role_data.role_key, db
+        )
+        # 如果角色存在，则返回角色
+        if is_role_exists_key:
+            return is_role_exists_key
+        is_role_exists_name = await UsersRepo.get_role_by_name(
+            user_role_data.role_name, db
+        )
+        # 如果角色存在，则返回角色
+        if is_role_exists_name:
+            return is_role_exists_name
+        # 创建角色
         user_role = UserRoleModel(
-            role_name="运行人员",
-            role_key="staff",
+            role_name=user_role_data.role_name,
+            role_key=user_role_data.role_key,
         )
         db.add(user_role)
         await db.commit()
         await db.refresh(user_role)
         return user_role
 
+    # 根据角色名称获取角色
+    @staticmethod
+    async def get_role_by_name(
+        role_name: str, db: AsyncSession
+    ) -> UserRoleModel | None:
+        result = await db.execute(
+            select(UserRoleModel).where(UserRoleModel.role_name == role_name)
+        )
+        return result.scalar_one_or_none()
+
+    # 根据角色key
+    @staticmethod
+    async def get_role_by_key(role_key: str, db: AsyncSession) -> UserRoleModel | None:
+        result = await db.execute(
+            select(UserRoleModel).where(UserRoleModel.role_key == role_key)
+        )
+        return result.scalar_one_or_none()
+
     # 发送验证码
     @staticmethod
-    async def send_verification_code(phone: str) -> str:
+    async def send_verification_code(phone: str) -> Dict[str, str | bool | None]:
         verification_code = str(random.randint(100000, 999999))
-        resp = await AliyunSmsService.send_sms(phone, verification_code)
-        if resp["body"]["Code"] == "OK":
+        response = await AliyunSmsService.send_sms(phone, verification_code)
+        if response:
+            print("发送验证码", verification_code)
             await redis_manager.set(
                 f"verification_code:{phone}", verification_code, ex=300
             )
-        return verification_code
+            return success_response(message="验证码发送成功")
+        else:
+            return error_response(message="验证码发送失败")
 
     # 验证验证码
     @staticmethod
     async def verify_verification_code(phone: str, verification_code: str) -> bool:
         stored_code = await redis_manager.get(f"verification_code:{phone}")
+        print("验证", stored_code, verification_code)
         return stored_code == verification_code

@@ -9,8 +9,9 @@ PHONE_REGEX = r"^1[3-9]\d{9}$"
 class UserRegisterSchema(BaseModel):
     username: str = Field(..., description="用户名")
     phone: str = Field(..., description="手机号")
-    verification_code: str = Field(..., description="验证码")
+    verification_code: str = Field(..., description="验证码", alias="verificationCode")
     password: str = Field(..., description="密码")
+    confirm_password: str = Field(..., description="确认密码", alias="confirmPassword")
 
     @field_validator("phone")
     @classmethod
@@ -18,6 +19,11 @@ class UserRegisterSchema(BaseModel):
         if not re.match(PHONE_REGEX, v):
             raise ValueError("手机号格式不正确")
         return v
+
+
+class CreateUserRoleSchema(BaseModel):
+    role_name: str = Field(default="运行人员", description="角色名称")
+    role_key: str = Field(default="staff", description="角色权限字符串")
 
 
 class SendCodeSchema(BaseModel):

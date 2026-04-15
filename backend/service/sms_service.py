@@ -1,10 +1,8 @@
-import json
 from alibabacloud_dypnsapi20170525.client import Client as Dypnsapi20170525Client
 from alibabacloud_tea_openapi import models as open_api_models
 from alibabacloud_dypnsapi20170525 import models as dypnsapi_20170525_models
 from alibabacloud_tea_util import models as util_models
 from core.settings import settings
-
 
 
 # 短信服务AliyunSmsService类
@@ -31,7 +29,7 @@ class AliyunSmsService:
         return Dypnsapi20170525Client(config)
 
     @staticmethod
-    async def send_sms(phone: str, code: str) -> None:
+    async def send_sms(phone: str, code: str) -> bool:
         """
         发送验证码短信的异步方法
         :param phone: 手机号（接收验证码的目标手机号）
@@ -56,11 +54,11 @@ class AliyunSmsService:
             resp = await client.send_sms_verify_code_with_options_async(
                 send_sms_verify_code_request, runtime
             )
-
+            print(resp)
             # 返回请求结果的JSON字符串
-            return json.dumps(resp, default=str, indent=2)
+            return resp.body.success
         except Exception as error:
             # 异常处理：打印错误信息和诊断建议
             # 注意：实际生产环境应当有更完善的异常处理机制
-            print(error.message)  # 错误消息
+            print(str(error))  # 错误消息
             print(error.data.get("Recommend"))  # 诊断建议

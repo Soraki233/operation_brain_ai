@@ -5,7 +5,9 @@ from db.session import BaseModel
 class User(BaseModel):
     __tablename__ = "user"
 
-    username = Column(String(50), unique=True, index=True, comment="用户名", nullable=False)
+    username = Column(
+        String(50), unique=True, index=True, comment="用户名", nullable=False
+    )
 
     nickname = Column(String(50), nullable=True, comment="昵称")
 
@@ -26,6 +28,8 @@ class User(BaseModel):
 class UserRole(BaseModel):
     __tablename__ = "user_role"
 
-    role_name = Column(String(100), default="运行人员", comment="角色名称")
+    role_name = Column(String(100), unique=True, default="运行人员", comment="角色名称", nullable=False)
 
-    role_key = Column(String(100), default="staff", comment="角色权限字符串 ")
+    role_key = Column(
+        String(100), unique=True, default="staff", comment="角色权限字符串 ", nullable=False
+    )
