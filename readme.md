@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>智能运维管理平台</strong><br/>
-  AI 驱动的运维管理系统，实现智能监控、自动化运维、数据驱动决策与绿色节能管理
+  AI 驱动的运维管理系统，实现智能监控、自动化运维、数据驱动决策与绿色节能管理（持续迭代中）
 </p>
 
 ---
@@ -18,160 +18,192 @@
 | 层级 | 技术栈 |
 |------|--------|
 | **前端** | Vue 3 · TypeScript · Vite · Vue Router · Pinia · Axios · Naive UI · Less |
-| **后端** | Python 3.13+ · FastAPI · SQLAlchemy 2 (async) · PostgreSQL · Pydantic |
-| **认证** | JWT (HS256) · bcrypt 密码哈希 |
+| **前端扩展** | 知识库本地文档预览：`mammoth`（Word）· `xlsx`（Excel）· `docx` |
+| **后端** | Python 3.13+ · FastAPI · SQLAlchemy 2（async）· PostgreSQL · Pydantic Settings |
+| **数据迁移** | Alembic（`psycopg2-binary` 用于迁移脚本同步元数据） |
+| **缓存 / 会话** | Redis（验证码等） |
+| **短信** | 阿里云号码认证 / 短信服务（`alibabacloud-dypnsapi20170525`） |
+| **认证** | JWT（`python-jose`）· bcrypt 密码哈希 |
+
+## 当前能力概览
+
+| 模块 | 说明 |
+|------|------|
+| **用户与认证** | 手机号注册 / 登录、短信验证码、JWT 鉴权、`/users/me` 获取当前用户 |
+| **工作台** | 登录后首页仪表盘（占位统计，可对接真实监控数据） |
+| **知识库** | 文件夹与文件列表 UI、上传入口、多格式预览（当前列表与部分数据为前端演示；`src/api/knowledge.ts` 预留后端接口） |
+| **AI 对话** | 多会话聊天界面（当前为前端本地演示数据；`src/api/chat.ts` 预留后端接口） |
+
+后端启动时会连接 Redis；注册流程依赖短信配置与验证码缓存。
 
 ## 项目结构
 
 ```
 operation_brain_ai/
-├── backend/                    # 后端服务
-│   ├── main.py                 # FastAPI 应用入口
-│   ├── pyproject.toml          # Python 依赖配置
-│   ├── uv.lock                 # uv 依赖锁定文件
+├── backend/
+│   ├── main.py                 # FastAPI 入口：生命周期、CORS、路由与全局异常
+│   ├── pyproject.toml
+│   ├── uv.lock
+│   ├── alembic.ini             # Alembic 配置
+│   ├── alembic/                # 迁移脚本与 env
 │   ├── core/
-│   │   ├── settings.py         # 环境配置（多环境支持）
-│   │   └── security.py         # JWT & 密码加密
+│   │   ├── settings.py         # 多环境配置（.env.current + .env.{env}）
+│   │   ├── security.py         # JWT、密码哈希
+│   │   ├── deps.py             # get_current_user 等依赖
+│   │   ├── redis.py            # Redis 连接管理
+│   │   ├── exception_handler.py
+│   │   └── reponse.py          # 统一成功/错误响应封装
 │   ├── db/
-│   │   ├── session.py          # 异步数据库引擎 & Session
-│   │   └── models/
-│   │       ├── __init__.py
-│   │       └── user.py         # 用户 & 角色模型
+│   │   ├── session.py          # 异步引擎、get_db
+│   │   └── models/             # User、UserRole 等
 │   ├── router/
-│   │   └── users_router.py     # 用户路由
-│   ├── schema/
-│   │   └── user_schema.py      # 请求/响应 Schema
-│   ├── .env.current            # 当前环境标识
-│   ├── .env.dev                # 开发环境配置
-│   └── .env.prod               # 生产环境配置
+│   │   └── users_router.py     # 公开路由 + 需鉴权路由
+│   ├── repository/
+│   │   └── users_repo.py       # 用户与验证码数据访问
+│   ├── service/
+│   │   └── sms_service.py      # 阿里云短信发送
+│   ├── schema/                 # Pydantic 模型（含统一 ResponseModel）
+│   ├── .env.current            # 当前环境名（由 EnvSettings 读取）
+│   ├── .env.dev / .env.prod   # 各环境密钥与连接串（勿提交真实密钥）
+│   └── .env.example            # 环境变量模板
 │
-├── frontend/                   # 前端应用
-│   ├── index.html              # HTML 入口
-│   ├── package.json            # Node 依赖配置
-│   ├── vite.config.ts          # Vite 构建配置
-│   ├── tsconfig.json           # TypeScript 配置
+├── frontend/
+│   ├── index.html
+│   ├── package.json
+│   ├── vite.config.ts          # 开发代理：/api -> 后端 8000
 │   ├── public/
-│   │   └── favicon.png         # 网站图标
 │   └── src/
-│       ├── main.ts             # 应用入口
-│       ├── App.vue             # 根组件（Naive UI 主题配置）
-│       ├── api/
-│       │   └── auth.ts         # 认证接口封装
-│       ├── router/
-│       │   └── index.ts        # 路由配置
+│       ├── main.ts
+│       ├── App.vue
+│       ├── api/                # users、chat、knowledge、core
+│       ├── router/index.ts     # 登录 / 注册 / 首页子路由
 │       ├── stores/
-│       │   ├── index.ts        # Pinia 初始化
-│       │   └── user.ts         # 用户状态管理
+│       ├── utils/              # request、知识库预览工具
 │       ├── styles/
-│       │   ├── variables.less  # 主题变量（蓝/绿双色）
-│       │   └── global.less     # 全局样式
-│       ├── utils/
-│       │   └── request.ts      # Axios 实例 & 拦截器
 │       └── views/
-│           ├── Login.vue       # 登录页
-│           └── Register.vue    # 注册页
+│           ├── Login/Login.vue
+│           ├── Register/Register.vue
+│           ├── Home/Home.vue
+│           ├── Dashboard/
+│           ├── Knowledge/      # 知识库页面与组件
+│           └── Chat/           # AI 对话页面与组件
 │
-└── readme.md
+└── README.md
 ```
 
 ## 快速开始
 
 ### 环境要求
 
-- **Python** >= 3.13
-- **Node.js** >= 18
-- **PostgreSQL** >= 14
-- **uv**（Python 包管理器，推荐）
+- **Python** >= 3.13  
+- **Node.js** >= 18（可使用 **npm** 或 **pnpm**；仓库含 `pnpm-lock.yaml`）  
+- **PostgreSQL** >= 14  
+- **Redis**（与 `core/settings.py` 中配置一致）  
+- **uv**（推荐，用于安装 Python 依赖）
 
-### 1. 数据库准备
-
-创建 PostgreSQL 数据库：
+### 1. 数据库
 
 ```sql
 CREATE DATABASE operation_brain;
 ```
 
-### 2. 后端启动
+### 2. 后端环境变量
+
+1. 在 `backend/.env.current` 中设置当前环境，例如：`ENV=dev`（对应 `EnvSettings.env`，用于加载 `backend/.env.dev`）。  
+2. 复制 `backend/.env.example` 为 `backend/.env.dev`（或 `prod`），并补全下列变量：
+
+| 类别 | 变量（示例） | 说明 |
+|------|----------------|------|
+| 数据库 | `POSTGRES_*` | 主机、端口、用户、密码、库名 |
+| Redis | `REDIS_*` | 主机、端口、密码、DB、键前缀、`REDIS_DEFAULT_TTL` |
+| 阿里云短信 | `ALIYUN_ACCESS_KEY`、`ALIYUN_SECRET_KEY`、`SMS_SIGN_NAME`、`SMS_TEMPLATE_CODE` | 注册验证码发送 |
+| JWT | `JWT_SECRET_KEY`、`JWT_ALGORITHM`（如 `HS256`）、`JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | 签发访问令牌 |
+
+> **说明**：应用启动时会在 lifespan 中执行 `create_all` 并连接 Redis。生产环境建议以 **Alembic 迁移** 为单一事实来源，并视情况关闭或收紧自动建表行为。
+
+### 3. 启动后端
 
 ```bash
 cd backend
-
-# 配置环境变量
-# 编辑 .env.current 设置 ENV=dev
-# 编辑 .env.dev 填入数据库连接信息：
-#   POSTGRES_HOST=localhost
-#   POSTGRES_PORT=5432
-#   POSTGRES_USER=your_user
-#   POSTGRES_PASSWORD=your_password
-#   POSTGRES_DB=operation_brain
-
-# 安装依赖
 uv sync
-
-# 启动开发服务器
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-后端服务运行在 `http://localhost:8000`，API 文档访问 `http://localhost:8000/docs`
+- 服务地址：`http://localhost:8000`  
+- Swagger：`http://localhost:8000/docs`  
 
-### 3. 前端启动
+**数据库迁移（可选）**：
+
+```bash
+cd backend
+# 生成修订（改模型后）
+alembic revision --autogenerate -m "describe_change"
+# 升级到最新
+alembic upgrade head
+```
+
+### 4. 启动前端
 
 ```bash
 cd frontend
-
-# 安装依赖
-npm install
-
-# 启动开发服务器
-npm run dev
+npm install   # 或 pnpm install
+npm run dev   # 或 pnpm dev
 ```
 
-前端服务运行在 `http://localhost:3000`，开发模式下 `/api` 请求自动代理到后端 `8000` 端口。
+- 前端开发地址：`http://localhost:3000`  
+- 请求默认 `baseURL` 为 `/api`，由 Vite 代理到 `http://localhost:8000`（路径会去掉 `/api` 前缀）。  
+- 若部署到与后端不同源的环境，可设置环境变量 `VITE_API_BASE_URL` 指向真实 API 根路径。
 
-### 4. 构建生产版本
+### 5. 前端生产构建
 
 ```bash
 cd frontend
 npm run build
 ```
 
-构建产物输出到 `frontend/dist` 目录。
+产物位于 `frontend/dist`。
+
+## API 与约定
+
+- **统一响应体**：业务成功时多为 `{ code, message, data }`（见 `schema/response.py` 与 `success_response`）。  
+- **公开接口**（无需 Token）：`POST /users/register`、`POST /users/login`、`GET /users/send-verification-code`  
+- **需鉴权接口**：在 `main.py` 中对 `protected_router` 统一注入 `get_current_user`，例如 `GET /users/me`  
+- **前端鉴权**：Axios 请求头携带 `Bearer <token>`；HTTP 401 时清空 token 并跳转登录。
 
 ## 主题色
 
-从项目 Logo 提取的双主题色方案：
+从项目 Logo 提取的双色方案：
 
 | 色彩 | 色值 | 用途 |
 |------|------|------|
-| 🔵 科技蓝 | `#2196F3` | 主色调，按钮、链接、主要交互元素 |
-| 🟢 生态绿 | `#4CAF50` | 辅助色，强调、渐变、成功状态 |
+| 科技蓝 | `#2196F3` | 主色、主要交互 |
+| 生态绿 | `#4CAF50` | 辅助色、成功态 |
 
-页面按钮与品牌区域采用蓝绿渐变 `linear-gradient(135deg, #2196F3, #4CAF50)`。
+品牌区域常用渐变：`linear-gradient(135deg, #2196F3, #4CAF50)`。
 
-## 后端架构说明
+## 后端说明摘要
 
-- **多环境配置**：通过 `.env.current` 中的 `ENV` 字段切换 `dev` / `prod` 环境，自动加载对应 `.env.{ENV}` 文件
-- **异步数据库**：基于 `asyncpg` 驱动 + SQLAlchemy 2 异步引擎，配置连接池参数优化性能
-- **自动建表**：应用启动时通过 `lifespan` 事件自动执行 `create_all`
-- **统一基类**：`BaseModel` 提供 `id`（UUID）、`created_at`、`updated_at`、`is_deleted` 通用字段
-- **安全模块**：bcrypt 密码加密、JWT Token 签发与验证
+- **多环境**：`.env.current` 决定加载 `.env.dev` 或 `.env.prod`。  
+- **异步数据库**：`asyncpg` + SQLAlchemy 2 异步会话。  
+- **模型基类**：`BaseModel` 提供 `id`（UUID）、时间戳、`is_deleted` 等公共字段。  
+- **异常处理**：HTTP / 校验 / 未捕获异常统一处理，返回一致错误结构。  
 
-## 前端架构说明
+## 前端说明摘要
 
-- **组件库**：Naive UI，已配置中文国际化与主题色覆盖
-- **状态管理**：Pinia，用户 Token 持久化到 localStorage
-- **HTTP 封装**：Axios 实例统一处理 Token 注入、401 自动跳转登录
-- **样式方案**：Less 预处理器，全局变量注入，支持响应式布局
-- **路由守卫**：`beforeEach` 自动设置页面标题
+- **UI**：Naive UI，中文语言包与主题色覆盖。  
+- **状态**：Pinia；Token 与用户名等持久化策略见 `stores/user.ts`。  
+- **路由**：`meta.public` 控制登录页；私有路由无 token 时重定向登录并带 `redirect`。  
+- **样式**：Less 全局变量注入，便于主题与布局统一。  
 
-## 开发脚本
+## 常用命令
 
 | 命令 | 说明 |
 |------|------|
-| `cd frontend && npm run dev` | 启动前端开发服务器 |
-| `cd frontend && npm run build` | 构建前端生产版本 |
+| `cd frontend && npm run dev` | 前端开发服务 |
+| `cd frontend && npm run build` | 前端生产构建 |
 | `cd frontend && npm run preview` | 预览构建产物 |
-| `cd backend && uvicorn main:app --reload` | 启动后端开发服务器 |
+| `cd backend && uvicorn main:app --reload` | 后端开发服务 |
+| `cd backend && alembic upgrade head` | 应用数据库迁移 |
 
 ## License
 
