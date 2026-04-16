@@ -7,6 +7,7 @@ import ChatHeader from './components/ChatHeader.vue'
 import ChatEmptyState from './components/ChatEmptyState.vue'
 import ChatMessageRow from './components/ChatMessageRow.vue'
 import ChatInputBar from './components/ChatInputBar.vue'
+import ChatSuggestedPrompts from './components/ChatSuggestedPrompts.vue'
 
 const message = useMessage()
 const scrollbarRef = ref<InstanceType<typeof NScrollbar> | null>(null)
@@ -74,6 +75,13 @@ function deleteSession(id: string) {
     activeSessionId.value = sessions.value[0]?.id || ''
   }
   message.success('已删除会话')
+}
+
+function sendSuggestedPrompt(text: string) {
+  const t = text.trim()
+  if (!t || sending.value) return
+  inputValue.value = t
+  handleSend()
 }
 
 function handleSend() {
@@ -155,6 +163,7 @@ const activeSession = computed(() => sessions.value.find((s) => s.id === activeS
         </TransitionGroup>
       </NScrollbar>
 
+      <ChatSuggestedPrompts @pick="sendSuggestedPrompt" />
       <ChatInputBar v-model="inputValue" :sending="sending" @send="handleSend" />
     </div>
   </div>

@@ -1,5 +1,10 @@
 import axios, { type AxiosInstance, type AxiosRequestConfig } from 'axios'
+import { createDiscreteApi } from 'naive-ui'
 import router from '@/router'
+
+const { message } = createDiscreteApi(['message'])
+
+let handling401 = false
 
 const instance = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
@@ -20,9 +25,15 @@ instance.interceptors.request.use(
 instance.interceptors.response.use(
   (response) => response.data,
   (error) => {
-    if (error.response?.status === 401) {
+    if (error.response?.status === 401 && !handling401) {
+      handling401 = true
+      message.error('登录已过期，请重新登录')
       localStorage.removeItem('token')
-      router.push({ name: 'Login', query: { redirect: router.currentRoute.value.fullPath } })
+      router
+        .push({ name: 'Login', query: { redirect: router.currentRoute.value.fullPath } })
+        .finally(() => {
+          handling401 = false
+        })
     }
     return Promise.reject(error)
   },

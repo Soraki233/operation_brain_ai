@@ -39,7 +39,7 @@ class UsersRepo:
             )
             # 创建角色
             staff_role = await UsersRepo.create_user_role(create_user_role_data, db)
-            # 设置用户角色ID
+        # 设置用户角色ID
         user = UserModel(
             phone=user_data.phone,
             username=user_data.username,

@@ -4,7 +4,7 @@ import sys
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
-
+from db.models import *  # noqa: F403
 from alembic import context
 from core.settings import settings
 from db.session import Base
@@ -26,7 +26,7 @@ if config.config_file_name is not None:
 # for 'autogenerate' support
 # from myapp import mymodel
 # target_metadata = mymodel.Base.metadata
-target_metadata = Base.metadata
+target_metadata = Base.metadata  # noqa: F405 确保 Base.metadata 被正确导入
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:

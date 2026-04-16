@@ -37,6 +37,33 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int
 
+    # RAG / Qwen
+    DASHSCOPE_API_KEY: str = ""
+    DASHSCOPE_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    QWEN_CHAT_MODEL: str = "qwen-plus"
+    QWEN_EMBEDDING_MODEL: str = "text-embedding-v4"
+    EMBEDDING_DIM: int = 1024
+
+    # 文件
+    KNOWLEDGE_UPLOAD_DIR: str = "storage/knowledge"
+    KNOWLEDGE_MAX_FILE_SIZE_MB: int = 50
+
+    # 切块
+    KNOWLEDGE_CHUNK_SIZE: int = 800
+    KNOWLEDGE_CHUNK_OVERLAP: int = 120
+
+    # 检索
+    KNOWLEDGE_RETRIEVE_TOP_K: int = 5
+
+    # 线程历史压缩
+    THREAD_SUMMARY_TRIGGER_MSG_COUNT: int = 20
+    THREAD_SUMMARY_TRIGGER_TOKEN_EST: int = 6000
+    THREAD_KEEP_RECENT_MSGS: int = 8
+
+    # 上下文压缩
+    MAX_CONTEXT_CHARS: int = 12000
+    CONTEXT_GROUP_CHARS: int = 3500
+
     # 构建异步数据库 URL
     @computed_field
     @property

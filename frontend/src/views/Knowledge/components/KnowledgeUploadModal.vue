@@ -1,73 +1,184 @@
 <script setup lang="ts">
-import { NModal, NUpload, NUploadDragger, NIcon, NText } from 'naive-ui'
+/**
+ * 上传弹窗
+ * - 仅挑选文件（default-upload 关闭），由「下一步：确认上传」触发二次确认后统一上传
+ * - 前端做一次类型白名单校验，不允许的类型会被剔除并提示
+ */
+import { inject } from 'vue'
+import {
+  NAlert,
+  NButton,
+  NIcon,
+  NModal,
+  NUpload,
+  NUploadDragger,
+  useMessage,
+} from 'naive-ui'
 import type { UploadFileInfo } from 'naive-ui'
+import {
+  KNOWLEDGE_UPLOAD_ACCEPT,
+  isAllowedKnowledgeFile,
+} from '../utils/fileAccept'
+import { KNOWLEDGE_WORKSPACE_KEY } from '../composables/knowledgeWorkspace'
 
-const props = defineProps<{
-  fileAccept: string
-  maxSizeMb: number
-  beforeUpload: (options: { file: UploadFileInfo }) => boolean | Promise<boolean>
-}>()
+const injected = inject(KNOWLEDGE_WORKSPACE_KEY)
+if (!injected) throw new Error('KnowledgeUploadModal 必须在 Knowledge 工作区内使用')
+const workspace = injected
 
-const show = defineModel<boolean>('show', { required: true })
+const message = useMessage()
 
-const emit = defineEmits<{
-  finish: [options: { file: UploadFileInfo; event?: ProgressEvent }]
-}>()
+function handleUploadChange(data: { fileList: UploadFileInfo[] }) {
+  const raw = data.fileList
+    .map((f) => f.file)
+    .filter((x): x is File => !!x)
+
+  const allowed: File[] = []
+  const rejected: string[] = []
+  for (const f of raw) {
+    if (isAllowedKnowledgeFile(f)) allowed.push(f)
+    else rejected.push(f.name)
+  }
+  if (rejected.length) {
+    message.warning(`以下文件类型不受支持，已忽略：${rejected.join('、')}`)
+  }
+  workspace.setUploadDraftFiles(allowed)
+}
 </script>
 
 <template>
-  <NModal v-model:show="show" preset="card" title="上传文件" style="width: 520px; max-width: 90vw;">
-    <NUpload
-      multiple
-      directory-dnd
-      :accept="fileAccept"
-      :default-upload="false"
-      :show-file-list="false"
-      @before-upload="props.beforeUpload"
-      @finish="(o) => emit('finish', o)"
-    >
-      <NUploadDragger>
-        <div class="upload-dragger-content">
-          <NIcon :size="48" class="upload-icon">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z" />
-            </svg>
-          </NIcon>
-          <NText class="upload-text">点击或拖拽文件到此区域上传</NText>
-          <NText depth="3" class="upload-hint">
-            支持 PDF / Word / TXT / Markdown / Excel / CSV，单文件最大 {{ maxSizeMb }}MB
-          </NText>
-        </div>
-      </NUploadDragger>
-    </NUpload>
+  <NModal
+    v-model:show="workspace.uploadVisible"
+    preset="card"
+    title="上传文件"
+    :style="{ width: '560px' }"
+    :mask-closable="false"
+    class="upload-modal"
+  >
+    <div class="upload-body">
+      <NAlert type="info" class="upload-tip" :bordered="false" title="上传说明">
+        支持 Markdown / Excel / TXT / 图片 / Word；文件将上传到：
+        <strong class="target-label">{{ workspace.breadcrumbLabel }}</strong>
+      </NAlert>
+
+      <NUpload
+        multiple
+        directory-dnd
+        :max="30"
+        :default-upload="false"
+        :accept="KNOWLEDGE_UPLOAD_ACCEPT"
+        class="upload-area"
+        @change="handleUploadChange"
+      >
+        <NUploadDragger class="dragger">
+          <div class="dragger-inner">
+            <div class="dragger-icon">
+              <NIcon size="28">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z" />
+                </svg>
+              </NIcon>
+            </div>
+            <div class="dragger-title">点击或拖拽文件到此处</div>
+            <div class="dragger-sub">
+              已选择
+              <span class="count">{{ workspace.uploadFileList.length }}</span>
+              个文件
+            </div>
+          </div>
+        </NUploadDragger>
+      </NUpload>
+    </div>
+
+    <template #footer>
+      <div class="footer-row">
+        <NButton quaternary @click="workspace.uploadVisible = false">取消</NButton>
+        <NButton
+          type="primary"
+          class="primary-gradient"
+          :loading="workspace.uploadSubmitting"
+          @click="workspace.requestConfirmUpload"
+        >
+          下一步：确认上传
+        </NButton>
+      </div>
+    </template>
   </NModal>
 </template>
 
 <style scoped lang="less">
-.upload-dragger-content {
+.upload-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.upload-tip {
+  margin-bottom: 16px;
+  border-radius: @border-radius-md;
+}
+
+.target-label {
+  color: @primary-blue;
+  margin-left: 4px;
+}
+
+.upload-area {
+  display: block;
+}
+
+.dragger {
+  padding: 28px 16px;
+  border-radius: @border-radius-lg;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.dragger-inner {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 32px 0;
+  gap: 10px;
 }
 
-.upload-icon {
+.dragger-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: @primary-blue-light;
   color: @primary-blue;
-  margin-bottom: 12px;
-  animation: floatUp 2s ease-in-out infinite;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.upload-text {
+.dragger-title {
+  font-weight: 600;
+  color: @text-primary;
   font-size: 15px;
-  margin-bottom: 4px;
 }
 
-.upload-hint {
+.dragger-sub {
   font-size: 13px;
+  color: @text-secondary;
 }
 
-@keyframes floatUp {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-6px); }
+.count {
+  color: @primary-blue;
+  font-weight: 600;
+  margin: 0 2px;
+}
+
+.footer-row {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.primary-gradient {
+  background: @gradient-primary !important;
+  border: none !important;
+  transition: opacity 0.2s;
+
+  &:hover {
+    opacity: 0.92;
+  }
 }
 </style>

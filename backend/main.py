@@ -1,8 +1,8 @@
 from fastapi import FastAPI, Depends
 from contextlib import asynccontextmanager
-from db.session import engine, Base
+
 from fastapi.middleware.cors import CORSMiddleware
-import db.models  # noqa: F401 — 确保所有模型注册到 Base.metadata
+from router.knowledge_router import router as knowledge_router
 from router.users_router import public_router, protected_router
 from core.redis import redis_manager
 from core.deps import get_current_user
@@ -17,8 +17,6 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
     await redis_manager.connect()
     yield
     await redis_manager.close()
@@ -43,3 +41,6 @@ app.include_router(public_router)
 
 # 需要鉴权的路由：全局注入 get_current_user 依赖
 app.include_router(protected_router, dependencies=[Depends(get_current_user)])
+
+
+app.include_router(knowledge_router, dependencies=[Depends(get_current_user)])
