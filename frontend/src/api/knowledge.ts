@@ -13,9 +13,11 @@
  *        GET    /knowledge/libraries                                 -> listLibraries
  *        GET    /knowledge/folders?libraryId=                        -> listFolders
  *        POST   /knowledge/folders                                   -> createFolder
+ *        PATCH  /knowledge/folders/:id   { name }                    -> renameFolder
  *        DELETE /knowledge/folders/:id                               -> deleteFolder
  *        GET    /knowledge/files                                     -> listFiles
  *          (query: libraryId, folderId, keyword, page, pageSize)
+ *        PATCH  /knowledge/files/:id     { name }                    -> renameFile
  *        DELETE /knowledge/files/:id                                 -> deleteFile
  *        POST   /knowledge/files/upload  (multipart/form-data)       -> uploadFiles
  *        GET    /knowledge/files/:id/preview (responseType: blob)    -> getFilePreviewBlob
@@ -142,6 +144,36 @@ export async function createFolder(
   return folder
 }
 
+/** 重命名文件夹 */
+export async function renameFolder(
+  folderId: string,
+  name: string,
+): Promise<KnowledgeFolder> {
+  // 真实实现: return request.patch<KnowledgeFolder>(`/knowledge/folders/${folderId}`, { name })
+  await mockDelay(200)
+  const trimmed = name.trim()
+  if (!trimmed) throw new Error('文件夹名称不能为空')
+
+  const target = mockFolders.find((f) => f.id === folderId)
+  if (!target) throw new Error('文件夹不存在')
+
+  // 同库下重名校验（排除自身）
+  if (
+    mockFolders.some(
+      (f) =>
+        f.id !== folderId &&
+        f.libraryId === target.libraryId &&
+        f.name === trimmed,
+    )
+  ) {
+    throw new Error('同一知识库下已存在同名文件夹')
+  }
+
+  const updated: KnowledgeFolder = { ...target, name: trimmed }
+  mockFolders = mockFolders.map((f) => (f.id === folderId ? updated : f))
+  return updated
+}
+
 /** 删除文件夹（同时删除其中所有文件，真实后端按约定调整） */
 export async function deleteFolder(folderId: string): Promise<void> {
   // 真实实现: return request.delete(`/knowledge/folders/${folderId}`)
@@ -174,6 +206,64 @@ export async function listFiles(
   const total = list.length
   const start = (params.page - 1) * params.pageSize
   return { list: list.slice(start, start + params.pageSize), total }
+}
+
+/** 根据文件名推断扩展名（小写，不含点） */
+function extFromName(name: string): string {
+  const i = name.lastIndexOf('.')
+  return i <= 0 || i === name.length - 1 ? '' : name.slice(i + 1).toLowerCase()
+}
+
+/**
+ * 重命名文件
+ *
+ * 规则：
+ * - 用户传入完整新文件名（可包含扩展名），内部重新推断 extension。
+ * - 若未包含扩展名，则沿用原扩展名（避免用户误删后缀）。
+ * - 同一 library + folder 下的文件名必须唯一。
+ */
+export async function renameFile(
+  fileId: string,
+  name: string,
+): Promise<KnowledgeFile> {
+  // 真实实现: return request.patch<KnowledgeFile>(`/knowledge/files/${fileId}`, { name })
+  await mockDelay(200)
+  const trimmed = name.trim()
+  if (!trimmed) throw new Error('文件名不能为空')
+
+  const target = mockFiles.find((f) => f.id === fileId)
+  if (!target) throw new Error('文件不存在')
+
+  // 如果用户没写扩展名，自动补回原扩展名
+  const hasExt = trimmed.includes('.')
+  const finalName = hasExt
+    ? trimmed
+    : target.extension
+      ? `${trimmed}.${target.extension}`
+      : trimmed
+  const finalExt = extFromName(finalName) || target.extension
+
+  // 同目录下重名校验
+  if (
+    mockFiles.some(
+      (f) =>
+        f.id !== fileId &&
+        f.libraryId === target.libraryId &&
+        f.folderId === target.folderId &&
+        f.name === finalName,
+    )
+  ) {
+    throw new Error('当前目录下已存在同名文件')
+  }
+
+  const updated: KnowledgeFile = {
+    ...target,
+    name: finalName,
+    extension: finalExt,
+    updatedAt: nowIso(),
+  }
+  mockFiles = mockFiles.map((f) => (f.id === fileId ? updated : f))
+  return updated
 }
 
 /** 删除文件 */

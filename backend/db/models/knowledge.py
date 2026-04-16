@@ -1,72 +1,61 @@
-from pgvector.sqlalchemy import Vector
-from sqlalchemy import Integer, String, Text
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Column, String, Integer, BigInteger, SmallInteger, Text
 
 from db.session import BaseModel
-from core.settings import settings
 
 
-# 知识库文件夹
+class KnowledgeBase(BaseModel):
+    __tablename__ = "knowledge_base"
+
+    name = Column(String(100), nullable=False, index=True, comment="知识库名称")
+    scope = Column(String(20), nullable=False, index=True, comment="personal/shared")
+
+    # personal 时为用户ID，shared 时为空
+    owner_user_id = Column(
+        String(32), nullable=True, index=True, comment="知识库归属用户ID"
+    )
+    creator_user_id = Column(String(32), nullable=False, index=True, comment="创建人ID")
+
+    is_active = Column(
+        SmallInteger,
+        nullable=False,
+        default=1,
+        comment="是否启用(1启用,0停用)",
+    )
+
+
 class KnowledgeFolder(BaseModel):
-    __tablename__ = "knowledge_folders"
+    __tablename__ = "knowledge_folder"
 
-    # parent_id: Mapped[str | None] = mapped_column(
-    #     String(36), nullable=True, index=True, comment="父级文件夹ID"
-    # )
-    name: Mapped[str] = mapped_column(String(100), nullable=False, comment="文件夹名称")
-    sort_no: Mapped[int] = mapped_column(Integer, default=0, comment="排序号")
+    kb_id = Column(String(32), nullable=False, index=True, comment="知识库ID")
+    parent_id = Column(
+        String(32), nullable=True, index=True, comment="父文件夹ID，当前可先不使用"
+    )
+    name = Column(String(100), nullable=False, index=True, comment="文件夹名称")
+    creator_user_id = Column(String(32), nullable=False, index=True, comment="创建人ID")
+    sort_order = Column(Integer, nullable=False, default=0, comment="排序")
+    is_active = Column(SmallInteger, nullable=False, default=1, comment="是否启用")
 
 
-# 知识库文件
 class KnowledgeFile(BaseModel):
-    __tablename__ = "knowledge_files"
+    __tablename__ = "knowledge_file"
 
-    folder_id: Mapped[str | None] = mapped_column(
-        String(36), nullable=True, index=True, comment="文件夹ID"
+    kb_id = Column(String(32), nullable=False, index=True, comment="知识库ID")
+    folder_id = Column(
+        String(32), nullable=True, index=True, comment="文件夹ID，可空表示知识库根目录"
     )
-    filename: Mapped[str] = mapped_column(
-        String(255), nullable=False, comment="原始文件名"
-    )
-    ext: Mapped[str] = mapped_column(
-        String(20), nullable=False, index=True, comment="扩展名"
-    )
-    content_type: Mapped[str | None] = mapped_column(
-        String(100), nullable=True, comment="MIME类型"
-    )
-    size: Mapped[int] = mapped_column(Integer, default=0, comment="文件字节数")
-    storage_path: Mapped[str] = mapped_column(
-        String(500), nullable=False, comment="文件存储路径"
-    )
-    status: Mapped[str] = mapped_column(
+    file_name = Column(String(255), nullable=False, index=True, comment="显示文件名")
+    file_ext = Column(String(20), nullable=False, comment="文件扩展名")
+    mime_type = Column(String(100), nullable=True, comment="MIME类型")
+    file_size = Column(BigInteger, nullable=False, default=0, comment="文件大小")
+    storage_path = Column(String(500), nullable=False, comment="本地存储路径")
+
+    parse_status = Column(
         String(20),
+        nullable=False,
         default="pending",
         index=True,
-        comment="文件状态: pending/parsing/ready/failed",
+        comment="pending/processing/success/failed",
     )
-    error_message: Mapped[str | None] = mapped_column(
-        Text, nullable=True, comment="错误信息"
-    )
-    chunk_count: Mapped[int] = mapped_column(Integer, default=0, comment="切块数量")
-
-
-# 知识库切块
-class KnowledgeChunk(BaseModel):
-    __tablename__ = "knowledge_chunks"
-
-    file_id: Mapped[str] = mapped_column(
-        String(36), nullable=False, index=True, comment="文件ID"
-    )
-    folder_id: Mapped[str | None] = mapped_column(
-        String(36), nullable=True, index=True, comment="文件夹ID"
-    )
-    chunk_index: Mapped[int] = mapped_column(
-        Integer, nullable=False, comment="切块序号"
-    )
-    content: Mapped[str] = mapped_column(Text, nullable=False, comment="文本内容")
-    meta_json: Mapped[dict] = mapped_column(
-        JSONB, default=dict, comment="页码、sheet等元信息"
-    )
-    embedding: Mapped[list[float]] = mapped_column(
-        Vector(settings.EMBEDDING_DIM), nullable=False, comment="向量"
-    )
+    chunk_count = Column(Integer, nullable=False, default=0, comment="切块数")
+    uploaded_by = Column(String(32), nullable=False, index=True, comment="上传人ID")
+    error_message = Column(Text, nullable=True, comment="失败原因")

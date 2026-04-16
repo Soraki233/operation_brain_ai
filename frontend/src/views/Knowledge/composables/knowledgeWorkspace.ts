@@ -79,6 +79,25 @@ export function createKnowledgeWorkspace() {
     onConfirm: null as null | (() => Promise<void>),
   })
 
+  // 重命名（文件夹 / 文件 共用同一个弹窗状态）
+  const renameState = reactive<{
+    visible: boolean
+    mode: 'folder' | 'file' | null
+    targetId: string | null
+    /** 原名，用于在标题提示中展示 */
+    originalName: string
+    /** 输入框绑定值 */
+    draftName: string
+    submitting: boolean
+  }>({
+    visible: false,
+    mode: null,
+    targetId: null,
+    originalName: '',
+    draftName: '',
+    submitting: false,
+  })
+
   // 预览
   const preview = reactive<KnowledgePreviewModel>({
     visible: false,
@@ -216,6 +235,68 @@ export function createKnowledgeWorkspace() {
       message.error(e instanceof Error ? e.message : '创建失败')
     } finally {
       createFolderSubmitting.value = false
+    }
+  }
+
+  /* --------------------------------- 重命名弹窗 --------------------------------- */
+
+  /** 打开文件夹重命名弹窗 */
+  function openRenameFolder(folder: KnowledgeFolder) {
+    renameState.mode = 'folder'
+    renameState.targetId = folder.id
+    renameState.originalName = folder.name
+    renameState.draftName = folder.name
+    renameState.visible = true
+  }
+
+  /** 打开文件重命名弹窗 */
+  function openRenameFile(file: KnowledgeFile) {
+    renameState.mode = 'file'
+    renameState.targetId = file.id
+    renameState.originalName = file.name
+    renameState.draftName = file.name
+    renameState.visible = true
+  }
+
+  function closeRenameDialog() {
+    renameState.visible = false
+    renameState.mode = null
+    renameState.targetId = null
+    renameState.originalName = ''
+    renameState.draftName = ''
+    renameState.submitting = false
+  }
+
+  /** 提交重命名，按 mode 分发到对应 API */
+  async function submitRename() {
+    const { mode, targetId, draftName, originalName } = renameState
+    if (!mode || !targetId) return
+    const name = draftName.trim()
+    if (!name) {
+      message.warning(mode === 'folder' ? '请输入文件夹名称' : '请输入文件名')
+      return
+    }
+    // 未修改：静默关闭
+    if (name === originalName) {
+      closeRenameDialog()
+      return
+    }
+    renameState.submitting = true
+    try {
+      if (mode === 'folder') {
+        await knowledgeApi.renameFolder(targetId, name)
+        await refreshFolders()
+        message.success('文件夹已重命名')
+      } else {
+        await knowledgeApi.renameFile(targetId, name)
+        await refreshFiles()
+        message.success('文件已重命名')
+      }
+      closeRenameDialog()
+    } catch (e: unknown) {
+      message.error(e instanceof Error ? e.message : '重命名失败')
+    } finally {
+      renameState.submitting = false
     }
   }
 
@@ -396,6 +477,7 @@ export function createKnowledgeWorkspace() {
     uploadVisible,
     uploadFileList,
     confirmState,
+    renameState,
     preview,
     selectedLibraryId,
     selectedFolderId,
@@ -406,6 +488,10 @@ export function createKnowledgeWorkspace() {
     refreshFiles,
     openCreateFolderModal,
     submitCreateFolder,
+    openRenameFolder,
+    openRenameFile,
+    submitRename,
+    closeRenameDialog,
     deleteFolderNow,
     deleteFileNow,
     onTreeSelect,

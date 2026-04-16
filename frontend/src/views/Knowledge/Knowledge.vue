@@ -78,6 +78,47 @@ onMounted(() => {
       @negative-click="workspace.handleConfirmCancel"
     />
 
+    <!-- 重命名（文件夹 / 文件 共用） -->
+    <NModal
+      v-model:show="workspace.renameState.visible"
+      preset="card"
+      :title="workspace.renameState.mode === 'folder' ? '重命名文件夹' : '重命名文件'"
+      :style="{ width: '460px' }"
+      :mask-closable="false"
+      @close="workspace.closeRenameDialog"
+    >
+      <div class="rename-hint">
+        <span class="rename-hint-label">原名称</span>
+        <span class="rename-hint-value" :title="workspace.renameState.originalName">
+          {{ workspace.renameState.originalName || '-' }}
+        </span>
+      </div>
+      <NInput
+        v-model:value="workspace.renameState.draftName"
+        :placeholder="
+          workspace.renameState.mode === 'folder'
+            ? '请输入新的文件夹名称'
+            : '请输入新的文件名（可含扩展名，留空则保留原扩展名）'
+        "
+        maxlength="120"
+        show-count
+        autofocus
+        @keyup.enter="workspace.submitRename"
+      />
+      <template #footer>
+        <div class="modal-footer">
+          <NButton quaternary @click="workspace.closeRenameDialog">取消</NButton>
+          <NButton
+            type="primary"
+            :loading="workspace.renameState.submitting"
+            @click="workspace.submitRename"
+          >
+            确定
+          </NButton>
+        </div>
+      </template>
+    </NModal>
+
     <!-- 上传 / 预览 -->
     <KnowledgeUploadModal />
     <KnowledgePreviewDrawer />
@@ -107,6 +148,32 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* 重命名弹窗的"原名称"提示行 */
+.rename-hint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  background: @bg-color;
+  border-radius: @border-radius-md;
+  font-size: 13px;
+  color: @text-secondary;
+}
+
+.rename-hint-label {
+  flex-shrink: 0;
+  color: @text-placeholder;
+}
+
+.rename-hint-value {
+  color: @text-primary;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @keyframes pageEnter {

@@ -2,7 +2,6 @@ from fastapi import FastAPI, Depends
 from contextlib import asynccontextmanager
 
 from fastapi.middleware.cors import CORSMiddleware
-from router.knowledge_router import router as knowledge_router
 from router.users_router import public_router, protected_router
 from core.redis import redis_manager
 from core.deps import get_current_user
@@ -42,5 +41,3 @@ app.include_router(public_router)
 # 需要鉴权的路由：全局注入 get_current_user 依赖
 app.include_router(protected_router, dependencies=[Depends(get_current_user)])
 
-
-app.include_router(knowledge_router, dependencies=[Depends(get_current_user)])

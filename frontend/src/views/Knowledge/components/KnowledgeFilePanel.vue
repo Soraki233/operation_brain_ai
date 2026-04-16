@@ -48,8 +48,9 @@ const FILE_ICON_SHEET =
   'M19 3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V5a2 2 0 00-2-2zm-9 14H5v-4h5v4zm0-6H5V7h5v4zm4 6h-3v-4h3v4zm5 0h-4v-4h4v4zm0-6h-4V7h4v4z'
 const FILE_ICON_PDF =
   'M7 2h10a2 2 0 012 2v16a2 2 0 01-2 2H7a2 2 0 01-2-2V4a2 2 0 012-2zm5 14l-4-4h3V8h2v4h3l-4 4z'
+// Markdown 官方 logo 的"M + 向下箭头"剪影，比之前的图标更能一眼识别为 MD
 const FILE_ICON_MD =
-  'M4 5h16a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V6a1 1 0 011-1zm3 10V9h2l2 2 2-2h2v6h-2v-3l-2 2-2-2v3H7zm12 0h-2v-3h-2l3-3 3 3h-2v3z'
+  'M3 7h2l2 2.5 2-2.5h2v10h-2v-6l-2 2-2-2v6H3V7zM15 7h2v5h2l-3 4.5-3-4.5h2V7z'
 
 function fileMetaOf(file: KnowledgeFile): FileMeta {
   const ext = file.extension
@@ -227,9 +228,9 @@ const columns: DataTableColumns<KnowledgeFile> = [
     title: '操作',
     key: 'actions',
     align: 'center',
-    width: 140,
+    width: 200,
     render: (row) =>
-      h('div', { class: 'row-actions',style: { justifyContent: 'center' } }, [
+      h('div', { class: 'row-actions', style: { justifyContent: 'center' } }, [
         h(
           'a',
           {
@@ -237,6 +238,14 @@ const columns: DataTableColumns<KnowledgeFile> = [
             onClick: () => void workspace.openPreview(row),
           },
           '预览',
+        ),
+        h(
+          'a',
+          {
+            class: 'link-btn link-btn--primary',
+            onClick: () => workspace.openRenameFile(row),
+          },
+          '重命名',
         ),
         h(
           NPopconfirm,

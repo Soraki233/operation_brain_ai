@@ -23,7 +23,51 @@ const injected = inject(KNOWLEDGE_WORKSPACE_KEY)
 if (!injected) throw new Error('KnowledgeSidebar 必须在 Knowledge 工作区内使用')
 const workspace = injected
 
-/** 文件夹节点右侧删除按钮 */
+/** 渲染一个小图标按钮（用于文件夹节点右侧的快捷操作） */
+function renderFolderIconButton(options: {
+  svgPath: string
+  tooltip: string
+  className: string
+  onClick: (e: MouseEvent) => void
+}) {
+  return h(
+    NTooltip,
+    { placement: 'right' },
+    {
+      trigger: () =>
+        h(
+          NButton,
+          {
+            size: 'tiny',
+            quaternary: true,
+            class: options.className,
+            onClick: (e: MouseEvent) => {
+              e.stopPropagation()
+              options.onClick(e)
+            },
+          },
+          {
+            icon: () =>
+              h(NIcon, { size: 14 }, {
+                default: () =>
+                  h(
+                    'svg',
+                    {
+                      xmlns: 'http://www.w3.org/2000/svg',
+                      viewBox: '0 0 24 24',
+                      fill: 'currentColor',
+                    },
+                    h('path', { d: options.svgPath }),
+                  ),
+              }),
+          },
+        ),
+      default: () => options.tooltip,
+    },
+  )
+}
+
+/** 文件夹节点右侧操作：重命名 + 删除 */
 function renderSuffix({ option }: { option: TreeOption }) {
   const key = String(option.key ?? '')
   if (!key.startsWith('folder:')) return undefined
@@ -31,7 +75,18 @@ function renderSuffix({ option }: { option: TreeOption }) {
   const folder = workspace.folders.find((f) => f.id === folderId)
   if (!folder) return undefined
 
-  return h(
+  // 重命名按钮：直接打开弹窗
+  const renameBtn = renderFolderIconButton({
+    // Material Icons: edit（铅笔）
+    svgPath:
+      'M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z',
+    tooltip: '重命名',
+    className: 'folder-action-btn folder-rename-btn',
+    onClick: () => workspace.openRenameFolder(folder),
+  })
+
+  // 删除按钮：NPopconfirm 包裹
+  const deleteBtn = h(
     NPopconfirm,
     {
       positiveText: '删除',
@@ -40,43 +95,20 @@ function renderSuffix({ option }: { option: TreeOption }) {
     },
     {
       trigger: () =>
-        h(
-          NTooltip,
-          { placement: 'right' },
-          {
-            trigger: () =>
-              h(
-                NButton,
-                {
-                  size: 'tiny',
-                  quaternary: true,
-                  class: 'folder-del-btn',
-                  onClick: (e: MouseEvent) => e.stopPropagation(),
-                },
-                {
-                  icon: () =>
-                    h(NIcon, { size: 14 }, {
-                      default: () =>
-                        h(
-                          'svg',
-                          {
-                            xmlns: 'http://www.w3.org/2000/svg',
-                            viewBox: '0 0 24 24',
-                            fill: 'currentColor',
-                          },
-                          h('path', {
-                            d: 'M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z',
-                          }),
-                        ),
-                    }),
-                },
-              ),
-            default: () => '删除文件夹',
+        renderFolderIconButton({
+          svgPath:
+            'M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z',
+          tooltip: '删除文件夹',
+          className: 'folder-action-btn folder-del-btn',
+          onClick: () => {
+            // 点击不做额外处理，交给 NPopconfirm 弹出确认
           },
-        ),
+        }),
       default: () => `确定删除文件夹「${folder.name}」？其中的文件也会被删除。`,
     },
   )
+
+  return h('span', { class: 'folder-actions' }, [renameBtn, deleteBtn])
 }
 
 /** 自定义节点前缀图标：库 & 文件夹 使用不同图标 */
@@ -219,7 +251,7 @@ function renderPrefix({ option }: { option: TreeOption }) {
 :deep(.n-tree .n-tree-node:hover) {
   background: @bg-white;
   box-shadow: @shadow-sm;
-  .folder-del-btn {
+  .folder-action-btn {
     opacity: 1;
   }
 }
@@ -244,12 +276,22 @@ function renderPrefix({ option }: { option: TreeOption }) {
   min-height: 36px;
 }
 
-/* 删除按钮：默认半透明，节点悬浮时显现 */
-:deep(.folder-del-btn) {
+/* 文件夹行右侧操作区 */
+:deep(.folder-actions) {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* 操作按钮：默认半透明，节点悬浮时显现 */
+:deep(.folder-action-btn) {
   opacity: 0;
   color: @text-placeholder;
-  transition: opacity 0.15s, color 0.15s;
-  margin-left: 4px;
+  transition: opacity 0.15s, color 0.15s, background 0.15s;
+}
+
+:deep(.folder-rename-btn:hover) {
+  color: @primary-blue;
 }
 
 :deep(.folder-del-btn:hover) {

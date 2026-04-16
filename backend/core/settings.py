@@ -77,6 +77,18 @@ class Settings(BaseSettings):
             f"{self.POSTGRES_DB}"
         )
 
+    @computed_field
+    @property
+    def VECTOR_DATABASE_URL(self) -> str:
+        return (
+            f"postgresql+psycopg://"
+            f"{self.POSTGRES_USER}:"
+            f"{self.POSTGRES_PASSWORD}@"
+            f"{self.POSTGRES_HOST}:"
+            f"{self.POSTGRES_PORT}/"
+            f"{self.POSTGRES_DB}"
+        )
+
     class Config:
         # 让环境变量文件名根据环境变量动态加载
         env_file = f".env.{EnvSettings().env}"
