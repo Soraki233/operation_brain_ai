@@ -16,7 +16,7 @@
  *        PATCH  /knowledge/folders/:id   { name }                    -> renameFolder
  *        DELETE /knowledge/folders/:id                               -> deleteFolder
  *        GET    /knowledge/files                                     -> listFiles
- *          (query: kb_id, folderId, keyword, page, pageSize)
+ *          (query: kb_id, folder_id, keyword, page, pageSize)
  *        PATCH  /knowledge/files/:id     { name }                    -> renameFile
  *        DELETE /knowledge/files/:id                                 -> deleteFile
  *        POST   /knowledge/files/upload  (multipart/form-data)       -> uploadFiles
@@ -68,22 +68,24 @@ let mockFiles: KnowledgeFile[] = [
   {
     id: 'fl_demo_readme',
     kb_id: 'personal',
-    folderId: null,
-    name: '欢迎.md',
-    extension: 'md',
-    mimeType: 'text/markdown',
-    sizeBytes: 120,
-    updatedAt: nowIso(),
+    folder_id: null,
+    file_name: '欢迎.md',
+    file_ext: 'md',
+    mime_type: 'text/markdown',
+    file_size: 120,
+    created_at: nowIso(),
+    parse_status: 'pending',
   },
   {
     id: 'fl_demo_note',
     kb_id: 'personal',
-    folderId: 'fd_demo_ops',
-    name: '值班记录.txt',
-    extension: 'txt',
-    mimeType: 'text/plain',
-    sizeBytes: 512,
-    updatedAt: nowIso(),
+    folder_id: 'fd_demo_ops',
+    file_name: '值班记录.txt',
+    file_ext: 'txt',
+    mime_type: 'text/plain',
+    file_size: 512,
+    created_at: nowIso(),
+    parse_status: 'pending',
   },
 ]
 
@@ -141,28 +143,28 @@ export async function createFolder(
 
 /** 重命名文件夹 */
 export async function renameFolder(
-  folderId: string,
+  folder_id: string,
   name: string,
 ): Promise<KnowledgeFolder> {
-  // 真实实现: return request.patch<KnowledgeFolder>(`/knowledge/folders/${folderId}`, { name }
+  // 真实实现: return request.patch<KnowledgeFolder>(`/knowledge/folders/${folder_id}`, { name }
   const trimmed = name.trim()
   if (!trimmed) throw new Error('文件夹名称不能为空')
-  const updated: KnowledgeFolderUpdateSchema = { id: folderId, name: trimmed }
+  const updated: KnowledgeFolderUpdateSchema = { id: folder_id, name: trimmed }
   const res = await request.put<{ data: KnowledgeFolder }>('/knowledge/folder/update', updated)
   return res.data
 }
 
 /** 删除文件夹（同时删除其中所有文件，真实后端按约定调整） */
-export async function deleteFolder(folderId: string): Promise<void> {
-  // 真实实现: return request.delete(`/knowledge/folders/${folderId}`)
+export async function deleteFolder(folder_id: string): Promise<void> {
+  // 真实实现: return request.delete(`/knowledge/folders/${folder_id}`)
   await mockDelay(200)
-  if (!mockFolders.some((f) => f.id === folderId)) {
+  if (!mockFolders.some((f) => f.id === folder_id)) {
     throw new Error('文件夹不存在')
   }
-  mockFolders = mockFolders.filter((f) => f.id !== folderId)
-  const gone = mockFiles.filter((f) => f.folderId === folderId)
+  mockFolders = mockFolders.filter((f) => f.id !== folder_id)
+  const gone = mockFiles.filter((f) => f.folder_id === folder_id)
   gone.forEach((f) => mockBlobStore.delete(f.id))
-  mockFiles = mockFiles.filter((f) => f.folderId !== folderId)
+  mockFiles = mockFiles.filter((f) => f.folder_id !== folder_id)
 }
 
 /** 获取文件列表（支持搜索 + 分页） */
@@ -170,20 +172,8 @@ export async function listFiles(
   params: KnowledgeQueryParams,
 ): Promise<PagedResult<KnowledgeFile>> {
   // 真实实现: return request.get<PagedResult<KnowledgeFile>>('/knowledge/files', { params })
-  await mockDelay(200)
-  const kw = params.keyword.trim().toLowerCase()
-  let list = mockFiles.filter(
-    (f) =>
-      f.kb_id === params.kb_id &&
-      (params.folderId === null
-        ? f.folderId === null
-        : f.folderId === params.folderId),
-  )
-  if (kw) list = list.filter((f) => f.name.toLowerCase().includes(kw))
-  list = [...list].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
-  const total = list.length
-  const start = (params.page - 1) * params.pageSize
-  return { list: list.slice(start, start + params.pageSize), total }
+  const res = await request.get<{ code: number; message: string; data: PagedResult<KnowledgeFile> }>('/knowledge/files/list', { params })
+  return res.data
 }
 
 /** 根据文件名推断扩展名（小写，不含点） */
@@ -216,10 +206,10 @@ export async function renameFile(
   const hasExt = trimmed.includes('.')
   const finalName = hasExt
     ? trimmed
-    : target.extension
-      ? `${trimmed}.${target.extension}`
+    : target.file_ext
+      ? `${trimmed}.${target.file_ext}`
       : trimmed
-  const finalExt = extFromName(finalName) || target.extension
+  const finalExt = extFromName(finalName) || target.file_ext
 
   // 同目录下重名校验
   if (
@@ -227,8 +217,8 @@ export async function renameFile(
       (f) =>
         f.id !== fileId &&
         f.kb_id === target.kb_id &&
-        f.folderId === target.folderId &&
-        f.name === finalName,
+        f.folder_id === target.folder_id &&
+        f.file_name === finalName,
     )
   ) {
     throw new Error('当前目录下已存在同名文件')
@@ -236,9 +226,9 @@ export async function renameFile(
 
   const updated: KnowledgeFile = {
     ...target,
-    name: finalName,
-    extension: finalExt,
-    updatedAt: nowIso(),
+    file_name: finalName,
+    file_ext: finalExt,
+    created_at: nowIso(),
   }
   mockFiles = mockFiles.map((f) => (f.id === fileId ? updated : f))
   return updated
@@ -263,31 +253,34 @@ export async function uploadFiles(
   payload: UploadPayload,
   files: File[],
 ): Promise<KnowledgeFile[]> {
+  console.log(files);
+
   // 真实实现示例：
-  //   const form = new FormData()
-  //   form.append('kb_id', payload.kb_id)
-  //   if (payload.folderId) form.append('folderId', payload.folderId)
-  //   files.forEach(f => form.append('files', f))
-  //   return request.post('/knowledge/files/upload', form)
-  await mockDelay(320)
-  const created: KnowledgeFile[] = []
-  for (const file of files) {
-    const id = randomId('fl')
-    const record: KnowledgeFile = {
-      id,
-      kb_id: payload.kb_id,
-      folderId: payload.folderId,
-      name: file.name,
-      extension: extFromFile(file),
-      mimeType: file.type || 'application/octet-stream',
-      sizeBytes: file.size,
-      updatedAt: nowIso(),
-    }
-    mockBlobStore.set(id, file)
-    mockFiles = [record, ...mockFiles]
-    created.push(record)
-  }
-  return created
+  const form = new FormData()
+  form.append('kb_id', payload.kb_id)
+  if (payload.folder_id) form.append('folder_id', payload.folder_id)
+  files.forEach(f => form.append('files', f))
+  const res = await request.post<{ data: KnowledgeFile[] }>('/knowledge/files/upload', form)
+  return res.data
+  // await mockDelay(320)
+  // const created: KnowledgeFile[] = []
+  // for (const file of files) {
+  //   const id = randomId('fl')
+  //   const record: KnowledgeFile = {
+  //     id,
+  //     kb_id: payload.kb_id,
+  //     folder_id: payload.folder_id,
+  //     name: file.name,
+  //     extension: extFromFile(file),
+  //     mimeType: file.type || 'application/octet-stream',
+  //     sizeBytes: file.size,
+  //     updatedAt: nowIso(),
+  //   }
+  //   mockBlobStore.set(id, file)
+  //   mockFiles = [record, ...mockFiles]
+  //   created.push(record)
+  // }
+  // return created
 }
 
 /** 获取文件二进制（用于预览，真实后端应以 blob 方式下载） */

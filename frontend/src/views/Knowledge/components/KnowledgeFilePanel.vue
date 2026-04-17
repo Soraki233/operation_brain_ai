@@ -53,8 +53,9 @@ const FILE_ICON_MD =
   'M3 7h2l2 2.5 2-2.5h2v10h-2v-6l-2 2-2-2v6H3V7zM15 7h2v5h2l-3 4.5-3-4.5h2V7z'
 
 function fileMetaOf(file: KnowledgeFile): FileMeta {
-  const ext = file.extension
-
+  // 小写扩展名，含点号，去掉点号
+  const ext = file.file_ext.replace('.', '')
+  
   // 图片
   if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) {
     return {
@@ -126,10 +127,13 @@ function fileMetaOf(file: KnowledgeFile): FileMeta {
 }
 
 /** 根据 updatedAt 衍生状态：最近 6 秒内的文件显示“处理中”，否则“就绪” */
-function statusOf(file: KnowledgeFile): { label: string; tone: 'ready' | 'processing' } {
-  const delta = Date.now() - new Date(file.updatedAt).getTime()
-  if (delta >= 0 && delta < 6000) return { label: '处理中', tone: 'processing' }
-  return { label: '就绪', tone: 'ready' }
+function statusOf(file: KnowledgeFile): { label: string; tone: 'pending' | 'processing' | 'success' | 'failed' | 'unknown' } {
+// 根据 parse_status 衍生状态
+if (file.parse_status === 'pending') return { label: '待处理', tone: 'pending' }
+if (file.parse_status === 'processing') return { label: '处理中', tone: 'processing' }
+if (file.parse_status === 'success') return { label: '就绪', tone: 'success' }
+if (file.parse_status === 'failed') return { label: '失败', tone: 'failed' }
+return { label: '未知', tone: 'unknown' }
 }
 
 /** 将日期格式化为 YYYY-MM-DD HH:mm（与图中示例一致） */
@@ -165,20 +169,20 @@ function renderFileIcon(meta: FileMeta) {
 const columns: DataTableColumns<KnowledgeFile> = [
   {
     title: '文件名',
-    key: 'name',
+    key: 'file_name',
     align: 'left',
     ellipsis: { tooltip: true },
     render: (row) => {
       const meta = fileMetaOf(row)
       return h('div', { class: 'name-cell' }, [
         renderFileIcon(meta),
-        h('span', { class: 'name-text' }, row.name),
+        h('span', { class: 'name-text' }, row.file_name),
       ])
     },
   },
   {
     title: '类型',
-    key: 'type',
+    key: 'file_ext',
     align: 'center',
     width: 120,
     render: (row) => {
@@ -198,18 +202,18 @@ const columns: DataTableColumns<KnowledgeFile> = [
     key: 'size',
     align: 'center',
     width: 110,
-    render: (row) => h('span', { class: 'muted-cell' }, workspace.formatBytes(row.sizeBytes)),
+    render: (row) => h('span', { class: 'muted-cell' }, workspace.formatBytes(row.file_size)),
   },
   {
     title: '上传时间',
-    key: 'updatedAt',
+    key: 'created_at',
     align: 'center',
     width: 180,
-    render: (row) => h('span', { class: 'muted-cell' }, formatDate(row.updatedAt)),
+    render: (row) => h('span', { class: 'muted-cell' }, formatDate(row.created_at)),
   },
   {
     title: '状态',
-    key: 'status',
+    key: 'parse_status',
     align: 'center',
     width: 100,
     render: (row) => {
@@ -257,7 +261,7 @@ const columns: DataTableColumns<KnowledgeFile> = [
           {
             trigger: () =>
               h('a', { class: 'link-btn link-btn--danger' }, '删除'),
-            default: () => `确定删除「${row.name}」？此操作不可恢复。`,
+            default: () => `确定删除「${row.file_name}」？此操作不可恢复。`,
           },
         ),
       ]),
@@ -749,10 +753,24 @@ const columns: DataTableColumns<KnowledgeFile> = [
   transition: background-color 0.15s, color 0.15s;
 }
 
+/* 非 active 项 hover：浅灰底 + 主题蓝文字 */
+:deep(.pager-bar .n-pagination .n-pagination-item:not(.n-pagination-item--active):not(.n-pagination-item--disabled):hover) {
+  background: #eef2ff;
+  color: @primary-blue;
+}
+
 :deep(.pager-bar .n-pagination .n-pagination-item--active) {
   background: @gradient-primary;
   color: #fff;
   border-color: transparent;
+}
+
+/* active 项 hover：保持渐变背景 + 白字，避免 naive-ui 默认把 color 改回蓝色造成“蓝底蓝字”看似消失 */
+:deep(.pager-bar .n-pagination .n-pagination-item--active:hover) {
+  background: @gradient-primary;
+  color: #fff;
+  border-color: transparent;
+  filter: brightness(1.05);
 }
 
 @keyframes tableEnter {
@@ -842,11 +860,11 @@ const columns: DataTableColumns<KnowledgeFile> = [
   border-radius: 50%;
 }
 
-.file-table .status-pill--ready {
+.file-table .status-pill--pending {
   background: #dcfce7;
   color: #15803d;
 }
-.file-table .status-pill--ready .status-dot {
+.file-table .status-pill--pending .status-dot {
   background: #22c55e;
   box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.2);
 }
@@ -859,6 +877,24 @@ const columns: DataTableColumns<KnowledgeFile> = [
   background: #f97316;
   box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.25);
   animation: kbFileStatusPulse 1.4s ease-in-out infinite;
+}
+
+.file-table .status-pill--success {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+.file-table .status-pill--success .status-dot {
+  background: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+}
+
+.file-table .status-pill--failed {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+.file-table .status-pill--failed .status-dot {
+  background: #ef4444;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.22);
 }
 
 @keyframes kbFileStatusPulse {

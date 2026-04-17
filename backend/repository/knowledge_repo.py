@@ -1,9 +1,20 @@
 from db.session import AsyncSession
 from db.models import KnowledgeBase as KnowledgeBaseModel
 from db.models import KnowledgeFolder as KnowledgeFolderModel
-from schema.knowledge_schema import KnowledgeBaseCreateSchema, KnowledgeFolderCreateSchema, KnowledgeFolderUpdateSchema
-from sqlalchemy import select
+from schema.knowledge_schema import (
+    KnowledgeBaseCreateSchema,
+    KnowledgeFolderCreateSchema,
+    KnowledgeFolderUpdateSchema,
+)
+from sqlalchemy import select, func
 from core.reponse import error_response
+from db.models import KnowledgeFile as KnowledgeFileModel
+from fastapi import UploadFile
+from core.settings import settings
+import asyncio
+from uuid import uuid4
+from pathlib import Path
+
 
 class KnowledgeRepo:
     @staticmethod
@@ -78,7 +89,6 @@ class KnowledgeRepo:
         )
         return knowledge_bases
 
-
     @staticmethod
     async def get_knowledge_folder_list(
         kb_id: str, db: AsyncSession
@@ -94,7 +104,9 @@ class KnowledgeRepo:
 
     @staticmethod
     async def create_knowledge_folder(
-        knowledge_folder_data: KnowledgeFolderCreateSchema, creator_user_id: str, db: AsyncSession
+        knowledge_folder_data: KnowledgeFolderCreateSchema,
+        creator_user_id: str,
+        db: AsyncSession,
     ) -> KnowledgeFolderModel:
         knowledge_folder = KnowledgeFolderModel(
             kb_id=knowledge_folder_data.kb_id,
@@ -106,10 +118,11 @@ class KnowledgeRepo:
         await db.refresh(knowledge_folder)
         return knowledge_folder
 
-
     @staticmethod
     async def update_knowledge_folder(
-        knowledge_folder_data: KnowledgeFolderUpdateSchema, creator_user_id: str, db: AsyncSession
+        knowledge_folder_data: KnowledgeFolderUpdateSchema,
+        creator_user_id: str,
+        db: AsyncSession,
     ) -> KnowledgeFolderModel:
         # 根据文件夹ID查询活跃且未删除的文件夹
         knowledge_folder = await db.execute(
@@ -132,3 +145,89 @@ class KnowledgeRepo:
         await db.refresh(knowledge_folder)
         # 返回更新后的文件夹对象
         return knowledge_folder
+
+    @staticmethod
+    async def get_knowledge_file_list(
+        kb_id: str,
+        page: int,
+        page_size: int,
+        db: AsyncSession,
+        folder_id: str | None = None,
+        keyword: str | None = None,
+    ) -> tuple[int, list[KnowledgeFileModel]]:
+        """
+        分页查询知识库文件列表。
+        folder_id 为 None 时查询知识库根目录下的文件（未归属任何文件夹）。
+        keyword 不为空时对 file_name 做模糊匹配。
+        返回 (total, items) 元组。
+        """
+        base_condition = [
+            KnowledgeFileModel.kb_id == kb_id,
+            KnowledgeFileModel.is_deleted == 0,
+        ]
+        if folder_id is not None:
+            base_condition.append(KnowledgeFileModel.folder_id == folder_id)
+        else:
+            base_condition.append(KnowledgeFileModel.folder_id.is_(None))
+
+        if keyword:
+            base_condition.append(KnowledgeFileModel.file_name.ilike(f"%{keyword}%"))
+
+        # 查询总数
+        count_result = await db.execute(
+            select(func.count()).select_from(KnowledgeFileModel).where(*base_condition)
+        )
+        total = count_result.scalar_one()
+
+        # 分页查询
+        offset = (page - 1) * page_size
+        items_result = await db.execute(
+            select(KnowledgeFileModel)
+            .where(*base_condition)
+            .order_by(KnowledgeFileModel.created_at.desc())
+            .offset(offset)
+            .limit(page_size)
+        )
+        items = items_result.scalars().all()
+        return total, list(items)
+
+    @staticmethod
+    async def create_knowledge_files(
+        kb_id: str,
+        folder_id: str | None,
+        file: UploadFile,
+        uploaded_by: str,
+        db: AsyncSession,
+    ) -> KnowledgeFileModel:
+        # 获取文件后缀
+        suffix = Path(file.filename).suffix.lower()
+        # 读取文件内容
+        content = await file.read()
+        # 生成文件物理名称
+        physical_name = f"{uuid4().hex}{suffix}"
+        # 生成文件保存目录
+        save_dir = Path(settings.KNOWLEDGE_UPLOAD_DIR) / kb_id
+        # 创建文件保存目录
+        save_dir.mkdir(parents=True, exist_ok=True)
+        # 生成文件保存路径
+        save_path = save_dir / physical_name
+        # 写入文件内容
+        await asyncio.to_thread(save_path.write_bytes, content,)
+        # 创建知识库文件对象
+        file = KnowledgeFileModel(
+            kb_id=kb_id,
+            folder_id=folder_id,
+            file_name=file.filename,
+            file_ext=suffix,
+            mime_type=file.content_type,
+            file_size=len(content),
+            storage_path=str(save_path),
+            parse_status="pending",
+            chunk_count=0,
+            uploaded_by=uploaded_by,
+            error_message=None,
+        )
+        db.add(file)
+        await db.commit()
+        await db.refresh(file)
+        return file

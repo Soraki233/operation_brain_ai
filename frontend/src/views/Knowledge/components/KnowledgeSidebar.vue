@@ -71,8 +71,8 @@ function renderFolderIconButton(options: {
 function renderSuffix({ option }: { option: TreeOption }) {
   const key = String(option.key ?? '')
   if (!key.startsWith('folder:')) return undefined
-  const folderId = key.slice(7)
-  const folder = workspace.folders.find((f) => f.id === folderId)
+  const folder_id = key.slice(7)
+  const folder = workspace.folders.find((f) => f.id === folder_id)
   if (!folder) return undefined
 
   // 重命名按钮：直接打开弹窗

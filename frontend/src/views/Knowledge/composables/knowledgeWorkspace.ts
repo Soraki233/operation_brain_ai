@@ -48,7 +48,7 @@ export function createKnowledgeWorkspace() {
   /**
    * 当前选中的树节点 key，格式：
    *   - 库：   lib:personal / lib:shared
-   *   - 文件夹：folder:<folderId>
+   *   - 文件夹：folder:<folder_id>
    * 默认选中个人知识库
    */
   const selectedTreeKey = ref<string>('')
@@ -125,7 +125,7 @@ export function createKnowledgeWorkspace() {
   })
 
   /** 当前选中的文件夹 id；未选中时为 null（代表库根目录） */
-  const selectedFolderId = computed<string | null>(() => {
+  const selectedfolder_id = computed<string | null>(() => {
     if (selectedTreeKey.value.startsWith('folder:')) {
       return selectedTreeKey.value.slice(7)
     }
@@ -136,8 +136,8 @@ export function createKnowledgeWorkspace() {
   const breadcrumbLabel = computed(() => {
     const lib = libraries.value.find((l) => l.id === selectedkb_id.value)
     const libName = lib?.name ?? '未选择知识库'
-    if (!selectedFolderId.value) return `${libName} / 根目录`
-    const fd = folders.value.find((f) => f.id === selectedFolderId.value)
+    if (!selectedfolder_id.value) return `${libName} / 根目录`
+    const fd = folders.value.find((f) => f.id === selectedfolder_id.value)
     return `${libName} / ${fd?.name ?? '文件夹'}`
   })
 
@@ -187,12 +187,14 @@ export function createKnowledgeWorkspace() {
     try {
       const res = await knowledgeApi.listFiles({
         kb_id: libId,
-        folderId: selectedFolderId.value,
+        folder_id: selectedfolder_id.value,
         keyword: keyword.value,
         page: page.value,
-        pageSize: pageSize.value,
+        page_size: pageSize.value,
       })
-      files.value = res.list
+      console.log(res);
+      
+      files.value = res.items
       total.value = res.total
     } catch (e: unknown) {
       message.error(e instanceof Error ? e.message : '加载文件列表失败')
@@ -257,8 +259,8 @@ export function createKnowledgeWorkspace() {
   function openRenameFile(file: KnowledgeFile) {
     renameState.mode = 'file'
     renameState.targetId = file.id
-    renameState.originalName = file.name
-    renameState.draftName = file.name
+    renameState.originalName = file.file_name
+    renameState.draftName = file.file_name
     renameState.visible = true
   }
 
@@ -361,7 +363,7 @@ export function createKnowledgeWorkspace() {
       uploadSubmitting.value = true
       try {
         await knowledgeApi.uploadFiles(
-          { kb_id: libId, folderId: selectedFolderId.value },
+          { kb_id: libId, folder_id: selectedfolder_id.value },
           uploadFileList.value,
         )
         message.success('上传完成')
@@ -402,14 +404,14 @@ export function createKnowledgeWorkspace() {
     preview.visible = true
     preview.loading = true
     preview.file = file
-    preview.previewType = inferPreviewType(file.name)
+    preview.previewType = inferPreviewType(file.file_name)
     preview.imageUrl = undefined
     preview.textContent = undefined
     preview.htmlContent = undefined
     preview.errorMessage = undefined
     try {
       const blob = await knowledgeApi.getFilePreviewBlob(file.id)
-      const built = await buildPreviewFromBlob(file.name, blob)
+      const built = await buildPreviewFromBlob(file.file_name, blob)
       preview.previewType = built.previewType
       preview.imageUrl = built.imageUrl
       preview.textContent = built.textContent
@@ -435,7 +437,7 @@ export function createKnowledgeWorkspace() {
 
   /** 表格中「类型」列的可读名称 */
   function displayFileType(file: KnowledgeFile): string {
-    if (!file.extension) return '未知'
+    if (!file.file_ext.replace('.', '')) return '未知'
     const map: Record<string, string> = {
       md: 'Markdown',
       markdown: 'Markdown',
@@ -451,7 +453,7 @@ export function createKnowledgeWorkspace() {
       doc: 'Word',
       docx: 'Word',
     }
-    return map[file.extension] ?? file.extension.toUpperCase()
+    return map[file.file_ext.replace('.', '')] ?? file.file_ext.toUpperCase().replace('.', '')
   }
 
   async function init() {
@@ -485,7 +487,7 @@ export function createKnowledgeWorkspace() {
     renameState,
     preview,
     selectedkb_id,
-    selectedFolderId,
+    selectedfolder_id,
     breadcrumbLabel,
     treeOptions,
     selectedKeysForTree,

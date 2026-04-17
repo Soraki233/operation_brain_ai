@@ -7,3 +7,4 @@ backend/.idea
 backend/.vscode
 backend/.pytest_cache
 backend/.ruff_cache
+backend/storage

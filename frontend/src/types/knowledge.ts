@@ -38,28 +38,29 @@ export interface KnowledgeFile {
   id: string
   kb_id: Knowledgekb_id
   /** null 表示挂在知识库根目录（未归入任何文件夹） */
-  folderId: string | null
-  name: string
-  /** 小写扩展名，不含点，例如 md、xlsx、png */
-  extension: string
-  mimeType: string
-  sizeBytes: number
-  updatedAt: string
+  folder_id: string | null
+  file_name: string
+  /** 小写扩展名，含点，例如 md、xlsx、png */
+  file_ext: string
+  mime_type: string
+  file_size: number
+  created_at: string
+  parse_status: 'pending' | 'processing' | 'success' | 'failed'
 }
-
+// 
 /** 文件列表查询参数（搜索 + 分页） */
 export interface KnowledgeQueryParams {
   kb_id: Knowledgekb_id
-  folderId: string | null
+  folder_id: string | null
   keyword: string
   page: number
-  pageSize: number
+  page_size: number
 }
 
 /** 上传目标：归属哪个知识库 + 可选文件夹 */
 export interface UploadPayload {
   kb_id: Knowledgekb_id
-  folderId: string | null
+  folder_id: string | null
 }
 
 /** 前端预览分类（用于在预览组件里做条件渲染） */
@@ -73,7 +74,7 @@ export type FilePreviewType =
 
 /** 通用分页结果 */
 export interface PagedResult<T> {
-  list: T[]
+  items: T[]
   total: number
 }
 

@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends
+from typing import Annotated, Optional
+
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from db.models.user import User
 from core.deps import get_current_user
 from repository.knowledge_repo import KnowledgeRepo
@@ -11,6 +13,10 @@ from schema.knowledge_schema import KnowledgeFolderRequestSchema
 from schema.knowledge_schema import KnowledgeFolderCreateSchema
 from schema.knowledge_schema import KnowledgeFolderResponseSchema
 from schema.knowledge_schema import KnowledgeFolderUpdateSchema
+from schema.knowledge_schema import KnowledgeFileCreateResponseSchema
+from schema.knowledge_schema import KnowledgeFileItemSchema
+from schema.knowledge_schema import PagedResponseSchema
+
 knowledge_router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 
 
@@ -68,7 +74,10 @@ async def create_knowledge_folder(
     )
     if not knowledge_folder:
         return error_response("创建知识库文件夹失败", 400)
-    return success_response(data=KnowledgeFolderResponseSchema.model_validate(knowledge_folder))
+    return success_response(
+        data=KnowledgeFolderResponseSchema.model_validate(knowledge_folder)
+    )
+
 
 # 更新知识库文件夹
 @knowledge_router.put("/folder/update", summary="更新知识库文件夹")
@@ -78,7 +87,72 @@ async def update_knowledge_folder(
     db: AsyncSession = Depends(get_db),
 ):
     knowledge_folder = await KnowledgeRepo.update_knowledge_folder(
-        knowledge_folder_update, current_user.id, db)
+        knowledge_folder_update, current_user.id, db
+    )
     if not knowledge_folder:
         return error_response("更新知识库文件夹失败", 400)
-    return success_response(data=KnowledgeFolderResponseSchema.model_validate(knowledge_folder))
+    return success_response(
+        data=KnowledgeFolderResponseSchema.model_validate(knowledge_folder)
+    )
+
+
+# 获取知识库文件列表（分页）
+@knowledge_router.get("/files/list", summary="获取知识库文件列表（分页）")
+async def get_knowledge_file_list(
+    kb_id: Annotated[str, Query(..., min_length=1, description="知识库ID")],
+    folder_id: Annotated[Optional[str], Query(description="文件夹ID，不传查询根目录")] = None,
+    keyword: Annotated[
+        Optional[str], Query(max_length=100, description="文件名模糊搜索关键词")
+    ] = None,
+    page: Annotated[int, Query(ge=1, description="页码，从1开始")] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100, description="每页条数，最大100")] = 20,
+    db: AsyncSession = Depends(get_db),
+):
+    # 空字符串统一视为未传
+    folder_id_val = folder_id if folder_id else None
+    keyword_val = keyword.strip() if keyword and keyword.strip() else None
+
+    total, items = await KnowledgeRepo.get_knowledge_file_list(
+        kb_id=kb_id,
+        page=page,
+        page_size=page_size,
+        db=db,
+        folder_id=folder_id_val,
+        keyword=keyword_val,
+    )
+    return success_response(
+        data=PagedResponseSchema[KnowledgeFileItemSchema](
+            total=total,
+            page=page,
+            page_size=page_size,
+            items=[KnowledgeFileItemSchema.model_validate(item) for item in items],
+        )
+    )
+
+
+# 创建知识库文件（多文件）
+@knowledge_router.post("/files/upload", summary="创建知识库文件（多文件）")
+async def create_knowledge_file(
+    kb_id: Annotated[str, Form(...)],
+    files: Annotated[list[UploadFile], File(...)],
+    folder_id: Annotated[str | None, Form(alias="folder_id")] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    knowledge_files = []
+    for file in files:
+        knowledge_files.append(
+            await KnowledgeRepo.create_knowledge_files(
+                kb_id,
+                folder_id,
+                file,
+                current_user.id,
+                db,
+            )
+        )
+    return success_response(
+        data=[
+            KnowledgeFileCreateResponseSchema.model_validate(item)
+            for item in knowledge_files
+        ]
+    )

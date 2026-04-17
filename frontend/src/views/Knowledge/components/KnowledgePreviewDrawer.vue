@@ -32,7 +32,7 @@ const workspace = injected
       <template #header>
         <div class="preview-header">
           <span class="preview-title">
-            {{ workspace.preview.file?.name || '文件预览' }}
+            {{ workspace.preview.file?.file_name || '文件预览' }}
           </span>
           <NTag
             v-if="workspace.preview.file"
