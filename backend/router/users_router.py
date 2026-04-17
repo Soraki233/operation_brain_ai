@@ -6,12 +6,16 @@ from schema.user_schema import (
     UserResponseSchema,
     LoginRequestSchema,
     TokenResponseSchema,
+    CreateUserRoleSchema,
+    UserCreateSchema,
 )
 from repository.users_repo import UsersRepo
 from core.reponse import success_response
 from core.exception_handler import http_exception_handler
 from core.security import verify_password, create_access_token
 from core.deps import get_current_user
+from repository.knowledge_repo import KnowledgeRepo
+from schema.knowledge_schema import KnowledgeBaseCreateSchema
 
 # ── 公开路由（无需 token） ──
 public_router = APIRouter(prefix="/users", tags=["users"])
@@ -35,7 +39,35 @@ async def register(
     if not verification_code:
         raise HTTPException(status_code=400, detail="验证码错误")
 
-    user = await UsersRepo.create_user(register_data, db)
+    # 获取角色为staff的角色ID
+    staff_role = await UsersRepo.get_role_by_key("staff", db)
+    # 如果角色不存在，则创建角色
+    if not staff_role:
+        # 创建角色
+        create_user_role_data = CreateUserRoleSchema(
+            role_name="运行人员", role_key="staff"
+        )
+        # 创建角色
+        staff_role = await UsersRepo.create_user_role(create_user_role_data, db)
+    if not staff_role:
+        return http_exception_handler(
+            HTTPException(status_code=400, detail="创建角色失败")
+        )
+    user = await UsersRepo.create_user(
+        UserCreateSchema(**register_data.model_dump(), role_id=staff_role.id), db
+    )
+    # 如果创建了用户，则自动创建个人知识库
+    knowledge_base_data = KnowledgeBaseCreateSchema(
+        name="个人知识库",
+        scope="personal",
+        owner_user_id=user.id,
+        creator_user_id=user.id,
+    )
+    knowledge_base = await KnowledgeRepo.create_knowledge_base(knowledge_base_data, db)
+    if not knowledge_base:
+        return http_exception_handler(
+            HTTPException(status_code=400, detail="创建知识库失败")
+        )
     if not user:
         return http_exception_handler(HTTPException(status_code=400, detail="注册失败"))
     return success_response(
@@ -73,6 +105,4 @@ protected_router = APIRouter(prefix="/users", tags=["users"])
 
 @protected_router.get("/me", summary="获取当前用户信息")
 async def get_me(current_user: User = Depends(get_current_user)):
-    return success_response(
-        data=UserResponseSchema.model_validate(current_user)
-    )
+    return success_response(data=UserResponseSchema.model_validate(current_user))

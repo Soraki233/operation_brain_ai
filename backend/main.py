@@ -5,6 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from router.users_router import public_router, protected_router
 from core.redis import redis_manager
 from core.deps import get_current_user
+from db.session import AsyncSessionLocal
+from repository.knowledge_repo import KnowledgeRepo
 from core.exception_handler import (
     http_exception_handler,
     validation_exception_handler,
@@ -12,11 +14,15 @@ from core.exception_handler import (
 )
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from router.knowledge_router import knowledge_router
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await redis_manager.connect()
+    # 启动时确保至少存在一个共享知识库
+    async with AsyncSessionLocal() as db:
+        await KnowledgeRepo.ensure_shared_knowledge_base(db)
     yield
     await redis_manager.close()
 
@@ -41,3 +47,4 @@ app.include_router(public_router)
 # 需要鉴权的路由：全局注入 get_current_user 依赖
 app.include_router(protected_router, dependencies=[Depends(get_current_user)])
 
+app.include_router(knowledge_router, dependencies=[Depends(get_current_user)])

@@ -19,7 +19,7 @@ import type {
   KnowledgeFile,
   KnowledgeFolder,
   KnowledgeLibrary,
-  KnowledgeLibraryId,
+  Knowledgekb_id,
   KnowledgePreviewModel,
 } from '@/types/knowledge'
 import { formatBytes } from '../utils/formatBytes'
@@ -51,7 +51,7 @@ export function createKnowledgeWorkspace() {
    *   - 文件夹：folder:<folderId>
    * 默认选中个人知识库
    */
-  const selectedTreeKey = ref<string>('lib:personal')
+  const selectedTreeKey = ref<string>('')
 
   const keyword = ref('')
   const page = ref(1)
@@ -113,13 +113,13 @@ export function createKnowledgeWorkspace() {
   /* ---------------------------------- 派生状态 ---------------------------------- */
 
   /** 当前所属知识库 id（若选中文件夹则为该文件夹所在的库） */
-  const selectedLibraryId = computed<KnowledgeLibraryId | null>(() => {
+  const selectedkb_id = computed<Knowledgekb_id | null>(() => {
     if (selectedTreeKey.value.startsWith('lib:')) {
-      return selectedTreeKey.value.slice(4) as KnowledgeLibraryId
+      return selectedTreeKey.value.slice(4) as Knowledgekb_id
     }
     if (selectedTreeKey.value.startsWith('folder:')) {
       const id = selectedTreeKey.value.slice(7)
-      return folders.value.find((f) => f.id === id)?.libraryId ?? null
+      return folders.value.find((f) => f.id === id)?.kb_id ?? null
     }
     return null
   })
@@ -134,7 +134,7 @@ export function createKnowledgeWorkspace() {
 
   /** 面包屑 */
   const breadcrumbLabel = computed(() => {
-    const lib = libraries.value.find((l) => l.id === selectedLibraryId.value)
+    const lib = libraries.value.find((l) => l.id === selectedkb_id.value)
     const libName = lib?.name ?? '未选择知识库'
     if (!selectedFolderId.value) return `${libName} / 根目录`
     const fd = folders.value.find((f) => f.id === selectedFolderId.value)
@@ -147,7 +147,7 @@ export function createKnowledgeWorkspace() {
       key: `lib:${lib.id}`,
       label: lib.name,
       children: folders.value
-        .filter((fd) => fd.libraryId === lib.id)
+        .filter((fd) => fd.kb_id === lib.id)
         .map((fd) => ({
           key: `folder:${fd.id}`,
           label: fd.name,
@@ -170,19 +170,23 @@ export function createKnowledgeWorkspace() {
     libraries.value = await knowledgeApi.listLibraries()
   }
 
+  async function setDefaultSelectedTreeKey() {
+    selectedTreeKey.value = `lib:${libraries.value[0].id}`
+  }
+
   async function refreshFolders() {
-    const personal = await knowledgeApi.listFolders('personal')
-    const shared = await knowledgeApi.listFolders('shared')
-    folders.value = [...personal, ...shared]
+    const reqs = libraries.value.map(lib =>knowledgeApi.listFolders(lib.id))
+    const res = await Promise.all(reqs)
+    folders.value = res.flat()
   }
 
   async function refreshFiles() {
-    const libId = selectedLibraryId.value
+    const libId = selectedkb_id.value
     if (!libId) return
     listLoading.value = true
     try {
       const res = await knowledgeApi.listFiles({
-        libraryId: libId,
+        kb_id: libId,
         folderId: selectedFolderId.value,
         keyword: keyword.value,
         page: page.value,
@@ -210,7 +214,7 @@ export function createKnowledgeWorkspace() {
   /* --------------------------------- 文件夹操作 --------------------------------- */
 
   function openCreateFolderModal() {
-    if (!selectedLibraryId.value) {
+    if (!selectedkb_id.value) {
       message.warning('请先选择一个知识库')
       return
     }
@@ -219,7 +223,7 @@ export function createKnowledgeWorkspace() {
   }
 
   async function submitCreateFolder() {
-    const libId = selectedLibraryId.value
+    const libId = selectedkb_id.value
     if (!libId) return
     if (!createFolderName.value.trim()) {
       message.warning('请输入文件夹名称')
@@ -305,7 +309,7 @@ export function createKnowledgeWorkspace() {
     try {
       await knowledgeApi.deleteFolder(folder.id)
       if (selectedTreeKey.value === `folder:${folder.id}`) {
-        selectedTreeKey.value = `lib:${folder.libraryId}`
+        selectedTreeKey.value = `lib:${folder.kb_id}`
       }
       await refreshFolders()
       await refreshFiles()
@@ -331,7 +335,7 @@ export function createKnowledgeWorkspace() {
   /* ---------------------------------- 上传流程 ---------------------------------- */
 
   function openUploadModal() {
-    if (!selectedLibraryId.value) {
+    if (!selectedkb_id.value) {
       message.warning('请先选择一个知识库或文件夹')
       return
     }
@@ -352,12 +356,12 @@ export function createKnowledgeWorkspace() {
     confirmState.title = '确认上传'
     confirmState.content = `将上传 ${uploadFileList.value.length} 个文件到：${breadcrumbLabel.value}，是否继续？`
     confirmState.onConfirm = async () => {
-      const libId = selectedLibraryId.value
+      const libId = selectedkb_id.value
       if (!libId) return
       uploadSubmitting.value = true
       try {
         await knowledgeApi.uploadFiles(
-          { libraryId: libId, folderId: selectedFolderId.value },
+          { kb_id: libId, folderId: selectedFolderId.value },
           uploadFileList.value,
         )
         message.success('上传完成')
@@ -452,6 +456,7 @@ export function createKnowledgeWorkspace() {
 
   async function init() {
     await refreshLibraries()
+    await setDefaultSelectedTreeKey()
     await refreshFolders()
     await refreshFiles()
   }
@@ -479,7 +484,7 @@ export function createKnowledgeWorkspace() {
     confirmState,
     renameState,
     preview,
-    selectedLibraryId,
+    selectedkb_id,
     selectedFolderId,
     breadcrumbLabel,
     treeOptions,

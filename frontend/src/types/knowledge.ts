@@ -7,11 +7,11 @@
  */
 
 /** 固定知识库标识（当前业务只有个人/共享两种，后端可改成数字 ID） */
-export type KnowledgeLibraryId = 'personal' | 'shared'
+export type Knowledgekb_id = 'personal' | 'shared' | string
 
 /** 知识库节点（当前业务为 2 个固定节点） */
 export interface KnowledgeLibrary {
-  id: KnowledgeLibraryId
+  id: Knowledgekb_id
   name: string
   /** 固定节点：前端不允许删除 */
   fixed: boolean
@@ -20,15 +20,23 @@ export interface KnowledgeLibrary {
 /** 文件夹（仅一层，不允许嵌套） */
 export interface KnowledgeFolder {
   id: string
-  libraryId: KnowledgeLibraryId
+  kb_id: Knowledgekb_id
   name: string
-  createdAt: string
 }
 
+export interface KnowledgeFolderUpdateSchema {
+  id: string
+  name: string
+}
+
+export interface KnowledgeFolderCreateSchema {
+  kb_id: Knowledgekb_id
+  name: string
+}
 /** 文件元信息 */
 export interface KnowledgeFile {
   id: string
-  libraryId: KnowledgeLibraryId
+  kb_id: Knowledgekb_id
   /** null 表示挂在知识库根目录（未归入任何文件夹） */
   folderId: string | null
   name: string
@@ -41,7 +49,7 @@ export interface KnowledgeFile {
 
 /** 文件列表查询参数（搜索 + 分页） */
 export interface KnowledgeQueryParams {
-  libraryId: KnowledgeLibraryId
+  kb_id: Knowledgekb_id
   folderId: string | null
   keyword: string
   page: number
@@ -50,7 +58,7 @@ export interface KnowledgeQueryParams {
 
 /** 上传目标：归属哪个知识库 + 可选文件夹 */
 export interface UploadPayload {
-  libraryId: KnowledgeLibraryId
+  kb_id: Knowledgekb_id
   folderId: string | null
 }
 

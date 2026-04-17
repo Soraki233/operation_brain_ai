@@ -21,6 +21,14 @@ class UserRegisterSchema(BaseModel):
         return v
 
 
+class UserCreateSchema(BaseModel):
+    username: str = Field(..., description="用户名")
+    phone: str = Field(..., description="手机号")
+    password: str = Field(..., description="密码")
+    confirm_password: str = Field(..., description="确认密码")
+    role_id: str = Field(..., description="角色ID")
+
+
 class CreateUserRoleSchema(BaseModel):
     role_name: str = Field(default="运行人员", description="角色名称")
     role_key: str = Field(default="staff", description="角色权限字符串")
@@ -51,7 +59,6 @@ class SendCodeSchema(BaseModel):
 class LoginRequestSchema(BaseModel):
     phone: str = Field(..., description="手机号")
     password: str = Field(..., min_length=6, max_length=32, description="密码")
-
 
 
 class TokenResponseSchema(BaseModel):

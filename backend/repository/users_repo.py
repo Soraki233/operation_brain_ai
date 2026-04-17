@@ -2,7 +2,7 @@ from typing import Dict
 from db.session import AsyncSession
 from db.models import User as UserModel, UserRole as UserRoleModel
 from sqlalchemy import select
-from schema.user_schema import UserRegisterSchema, CreateUserRoleSchema
+from schema.user_schema import UserCreateSchema, CreateUserRoleSchema
 from core.security import get_password_hash
 from core.redis import redis_manager
 import random
@@ -27,25 +27,16 @@ class UsersRepo:
 
     # 创建用户
     @staticmethod
-    async def create_user(user_data: UserRegisterSchema, db: AsyncSession) -> UserModel:
-
-        # 获取角色为staff的角色ID
-        staff_role = await UsersRepo.get_role_by_key("staff", db)
-        # 如果角色不存在，则创建角色
-        if not staff_role:
-            # 创建角色
-            create_user_role_data = CreateUserRoleSchema(
-                role_name="运行人员", role_key="staff"
-            )
-            # 创建角色
-            staff_role = await UsersRepo.create_user_role(create_user_role_data, db)
+    async def create_user(user_data: UserCreateSchema, db: AsyncSession) -> UserModel:
         # 设置用户角色ID
         user = UserModel(
             phone=user_data.phone,
             username=user_data.username,
             hashed_password=get_password_hash(user_data.password),
-            role_id=staff_role.id,
+            role_id=user_data.role_id,
         )
+        if not user:
+            return error_response(message="创建用户失败")
         db.add(user)
         await db.commit()
         await db.refresh(user)
@@ -103,7 +94,6 @@ class UsersRepo:
         verification_code = str(random.randint(100000, 999999))
         response = await AliyunSmsService.send_sms(phone, verification_code)
         if response:
-            print("发送验证码", verification_code)
             await redis_manager.set(
                 f"verification_code:{phone}", verification_code, ex=300
             )
@@ -115,5 +105,4 @@ class UsersRepo:
     @staticmethod
     async def verify_verification_code(phone: str, verification_code: str) -> bool:
         stored_code = await redis_manager.get(f"verification_code:{phone}")
-        print("验证", stored_code, verification_code)
         return stored_code == verification_code

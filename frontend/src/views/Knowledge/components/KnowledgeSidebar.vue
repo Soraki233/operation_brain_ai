@@ -271,6 +271,10 @@ function renderPrefix({ option }: { option: TreeOption }) {
   color: @primary-blue;
 }
 
+:deep(.n-tree-node-switcher) {
+  height: 40px !important;
+}
+
 :deep(.n-tree-node-content) {
   padding: 6px 4px;
   min-height: 36px;

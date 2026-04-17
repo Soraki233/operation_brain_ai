@@ -11,12 +11,12 @@
  *        import request from '@/utils/request'
  *   2) 建议接口（可按后端实际调整）：
  *        GET    /knowledge/libraries                                 -> listLibraries
- *        GET    /knowledge/folders?libraryId=                        -> listFolders
+ *        GET    /knowledge/folders?kb_id=                        -> listFolders
  *        POST   /knowledge/folders                                   -> createFolder
  *        PATCH  /knowledge/folders/:id   { name }                    -> renameFolder
  *        DELETE /knowledge/folders/:id                               -> deleteFolder
  *        GET    /knowledge/files                                     -> listFiles
- *          (query: libraryId, folderId, keyword, page, pageSize)
+ *          (query: kb_id, folderId, keyword, page, pageSize)
  *        PATCH  /knowledge/files/:id     { name }                    -> renameFile
  *        DELETE /knowledge/files/:id                                 -> deleteFile
  *        POST   /knowledge/files/upload  (multipart/form-data)       -> uploadFiles
@@ -29,11 +29,14 @@ import type {
   KnowledgeFile,
   KnowledgeFolder,
   KnowledgeLibrary,
-  KnowledgeLibraryId,
+  Knowledgekb_id,
   KnowledgeQueryParams,
   PagedResult,
   UploadPayload,
+  KnowledgeFolderCreateSchema,
+  KnowledgeFolderUpdateSchema,
 } from '@/types/knowledge'
+import request from '@/utils/request'
 
 /** 模拟网络延迟 */
 function mockDelay(ms = 260) {
@@ -56,15 +59,15 @@ const libraries: KnowledgeLibrary[] = [
 ]
 
 let mockFolders: KnowledgeFolder[] = [
-  { id: 'fd_demo_ops', libraryId: 'personal', name: '运维手册', createdAt: nowIso() },
-  { id: 'fd_demo_prod', libraryId: 'personal', name: '产品文档', createdAt: nowIso() },
-  { id: 'fd_demo_team', libraryId: 'shared', name: '团队规范', createdAt: nowIso() },
+  { id: 'fd_demo_ops', kb_id: 'personal', name: '运维手册' },
+  { id: 'fd_demo_prod', kb_id: 'personal', name: '产品文档' },
+  { id: 'fd_demo_team', kb_id: 'shared', name: '团队规范' },
 ]
 
 let mockFiles: KnowledgeFile[] = [
   {
     id: 'fl_demo_readme',
-    libraryId: 'personal',
+    kb_id: 'personal',
     folderId: null,
     name: '欢迎.md',
     extension: 'md',
@@ -74,7 +77,7 @@ let mockFiles: KnowledgeFile[] = [
   },
   {
     id: 'fl_demo_note',
-    libraryId: 'personal',
+    kb_id: 'personal',
     folderId: 'fd_demo_ops',
     name: '值班记录.txt',
     extension: 'txt',
@@ -104,44 +107,36 @@ seedBlobForFile(
 
 /* --------------------------------- API 封装 --------------------------------- */
 
-/** 获取知识库列表（固定两项） */
+/** 获取知识库列表 */
 export async function listLibraries(): Promise<KnowledgeLibrary[]> {
-  // 真实实现: return request.get<KnowledgeLibrary[]>('/knowledge/libraries')
-  await mockDelay(120)
-  return [...libraries]
+  const res = await request.get<{ code: number; message: string; data: KnowledgeLibrary[] }>('/knowledge/list')
+  return res.data
 }
 
 /** 获取某个知识库下的文件夹（单层） */
 export async function listFolders(
-  libraryId: KnowledgeLibraryId,
+  kb_id: Knowledgekb_id,
 ): Promise<KnowledgeFolder[]> {
-  // 真实实现: return request.get<KnowledgeFolder[]>('/knowledge/folders', { params: { libraryId } })
-  await mockDelay(160)
-  return mockFolders
-    .filter((f) => f.libraryId === libraryId)
-    .sort((a, b) => a.name.localeCompare(b.name))
+  // 真实实现: return request.get<KnowledgeFolder[]>('/knowledge/folders', { params: { kb_id } })
+  const res = await request.get<{ code: number; message: string; data: KnowledgeFolder[] }>('/knowledge/folder/list', { params: { kb_id: kb_id } })
+  return res.data
 }
 
 /** 新建文件夹 */
 export async function createFolder(
-  libraryId: KnowledgeLibraryId,
+  kb_id: Knowledgekb_id,
   name: string,
 ): Promise<KnowledgeFolder> {
-  // 真实实现: return request.post<KnowledgeFolder>('/knowledge/folders', { libraryId, name })
-  await mockDelay(200)
+  // 真实实现: return request.post<KnowledgeFolder>('/knowledge/folders', { kb_id, name })
+
   const trimmed = name.trim()
   if (!trimmed) throw new Error('文件夹名称不能为空')
-  if (mockFolders.some((f) => f.libraryId === libraryId && f.name === trimmed)) {
+  if (mockFolders.some((f) => f.kb_id === kb_id && f.name === trimmed)) {
     throw new Error('同一知识库下已存在同名文件夹')
   }
-  const folder: KnowledgeFolder = {
-    id: randomId('fd'),
-    libraryId,
-    name: trimmed,
-    createdAt: nowIso(),
-  }
-  mockFolders = [...mockFolders, folder]
-  return folder
+  const folder: KnowledgeFolderCreateSchema = { kb_id: kb_id, name: trimmed }
+  const res = await request.post<{ data: KnowledgeFolder }>('/knowledge/folder/create', folder)
+  return res.data
 }
 
 /** 重命名文件夹 */
@@ -149,29 +144,12 @@ export async function renameFolder(
   folderId: string,
   name: string,
 ): Promise<KnowledgeFolder> {
-  // 真实实现: return request.patch<KnowledgeFolder>(`/knowledge/folders/${folderId}`, { name })
-  await mockDelay(200)
+  // 真实实现: return request.patch<KnowledgeFolder>(`/knowledge/folders/${folderId}`, { name }
   const trimmed = name.trim()
   if (!trimmed) throw new Error('文件夹名称不能为空')
-
-  const target = mockFolders.find((f) => f.id === folderId)
-  if (!target) throw new Error('文件夹不存在')
-
-  // 同库下重名校验（排除自身）
-  if (
-    mockFolders.some(
-      (f) =>
-        f.id !== folderId &&
-        f.libraryId === target.libraryId &&
-        f.name === trimmed,
-    )
-  ) {
-    throw new Error('同一知识库下已存在同名文件夹')
-  }
-
-  const updated: KnowledgeFolder = { ...target, name: trimmed }
-  mockFolders = mockFolders.map((f) => (f.id === folderId ? updated : f))
-  return updated
+  const updated: KnowledgeFolderUpdateSchema = { id: folderId, name: trimmed }
+  const res = await request.put<{ data: KnowledgeFolder }>('/knowledge/folder/update', updated)
+  return res.data
 }
 
 /** 删除文件夹（同时删除其中所有文件，真实后端按约定调整） */
@@ -196,7 +174,7 @@ export async function listFiles(
   const kw = params.keyword.trim().toLowerCase()
   let list = mockFiles.filter(
     (f) =>
-      f.libraryId === params.libraryId &&
+      f.kb_id === params.kb_id &&
       (params.folderId === null
         ? f.folderId === null
         : f.folderId === params.folderId),
@@ -248,7 +226,7 @@ export async function renameFile(
     mockFiles.some(
       (f) =>
         f.id !== fileId &&
-        f.libraryId === target.libraryId &&
+        f.kb_id === target.kb_id &&
         f.folderId === target.folderId &&
         f.name === finalName,
     )
@@ -287,7 +265,7 @@ export async function uploadFiles(
 ): Promise<KnowledgeFile[]> {
   // 真实实现示例：
   //   const form = new FormData()
-  //   form.append('libraryId', payload.libraryId)
+  //   form.append('kb_id', payload.kb_id)
   //   if (payload.folderId) form.append('folderId', payload.folderId)
   //   files.forEach(f => form.append('files', f))
   //   return request.post('/knowledge/files/upload', form)
@@ -297,7 +275,7 @@ export async function uploadFiles(
     const id = randomId('fl')
     const record: KnowledgeFile = {
       id,
-      libraryId: payload.libraryId,
+      kb_id: payload.kb_id,
       folderId: payload.folderId,
       name: file.name,
       extension: extFromFile(file),
