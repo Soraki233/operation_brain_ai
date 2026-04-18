@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, nextTick, watch, computed } from 'vue'
+import { ref, nextTick, watch, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useMessage, NScrollbar } from 'naive-ui'
-import type { ChatSession, ChatMessage } from '@/api/chat'
+import * as chatApi from '@/api/chat'
+import type { ChatSession, ChatMessage, StreamAskHandle } from '@/api/chat'
 import ChatSidebar from './components/ChatSidebar.vue'
 import ChatHeader from './components/ChatHeader.vue'
 import ChatEmptyState from './components/ChatEmptyState.vue'
@@ -14,29 +15,38 @@ const scrollbarRef = ref<InstanceType<typeof NScrollbar> | null>(null)
 const inputValue = ref('')
 const sending = ref(false)
 
-const sessions = ref<ChatSession[]>([
-  { id: '1', title: '运维故障排查', createdAt: '2026-04-13 10:00', updatedAt: '2026-04-13 10:30' },
-  { id: '2', title: '系统监控方案', createdAt: '2026-04-12 14:00', updatedAt: '2026-04-12 15:00' },
-])
+const sessions = ref<ChatSession[]>([])
+const activeSessionId = ref('')
+const messagesMap = ref<Record<string, ChatMessage[]>>({})
 
-const activeSessionId = ref('1')
+/** 当前流式请求句柄，切换会话 / 卸载组件时用于中止 */
+let currentStream: StreamAskHandle | null = null
 
-const messagesMap = ref<Record<string, ChatMessage[]>>({
-  '1': [
-    { id: 'm1', role: 'assistant', content: '你好！我是运行智脑 AI 助手，可以帮您解答运维相关问题。请问有什么可以帮您的？', createdAt: '2026-04-13 10:00' },
-    { id: 'm2', role: 'user', content: '服务器 CPU 使用率持续超过 90%，应该如何排查？', createdAt: '2026-04-13 10:01' },
-    { id: 'm3', role: 'assistant', content: '**CPU 使用率过高的排查步骤：**\n\n1. **查看进程列表**\n   使用 `top` 或 `htop` 命令查看占用 CPU 最高的进程\n\n2. **分析进程详情**\n   - `ps aux --sort=-%cpu | head -20` 查看 CPU 占用 Top 20 进程\n   - 确认是否有异常进程\n\n3. **检查系统负载**\n   - `uptime` 查看系统负载\n   - `vmstat 1 10` 观察 CPU 等待情况\n\n4. **日志分析**\n   - 检查应用日志是否有死循环或大量请求\n   - 查看 `/var/log/syslog` 或 `dmesg`\n\n5. **针对性处理**\n   - 如果是应用进程：考虑优化代码或扩容\n   - 如果是系统进程：检查是否有安全问题\n\n需要我进一步分析某个具体场景吗？', createdAt: '2026-04-13 10:02' },
-  ],
-  '2': [
-    { id: 'm4', role: 'assistant', content: '你好！请问您想了解哪方面的系统监控方案？', createdAt: '2026-04-12 14:00' },
-  ],
+const currentMessages = computed(
+  () => messagesMap.value[activeSessionId.value] || [],
+)
+const activeSession = computed(() =>
+  sessions.value.find((s) => s.id === activeSessionId.value),
+)
+
+/* ------------------------------- 生命周期 ------------------------------- */
+
+onMounted(async () => {
+  await refreshSessions()
+  if (sessions.value.length > 0) {
+    await selectSession(sessions.value[0].id)
+  }
 })
 
-const currentMessages = computed(() => messagesMap.value[activeSessionId.value] || [])
+onBeforeUnmount(() => {
+  currentStream?.abort()
+})
 
 watch(activeSessionId, () => {
   nextTick(() => scrollToBottom())
 })
+
+/* --------------------------------- 工具 --------------------------------- */
 
 function scrollToBottom() {
   nextTick(() => {
@@ -44,38 +54,64 @@ function scrollToBottom() {
   })
 }
 
-function selectSession(id: string) {
-  activeSessionId.value = id
+async function refreshSessions() {
+  try {
+    sessions.value = await chatApi.listThreads()
+  } catch {
+    // 错误提示由 request 拦截器统一处理
+  }
 }
 
-function createSession() {
-  const id = Date.now().toString()
-  const session: ChatSession = {
-    id,
-    title: '新对话',
-    createdAt: new Date().toLocaleString('zh-CN'),
-    updatedAt: new Date().toLocaleString('zh-CN'),
+async function loadMessages(sessionId: string) {
+  try {
+    const list = await chatApi.listMessages(sessionId)
+    messagesMap.value[sessionId] = list
+  } catch {
+    messagesMap.value[sessionId] = []
   }
-  sessions.value.unshift(session)
-  messagesMap.value[id] = [
-    {
-      id: `m-${id}-welcome`,
-      role: 'assistant',
-      content: '你好！我是运行智脑 AI 助手，请问有什么可以帮您的？',
-      createdAt: new Date().toLocaleString('zh-CN'),
-    },
-  ]
-  activeSessionId.value = id
 }
 
-function deleteSession(id: string) {
-  sessions.value = sessions.value.filter((s) => s.id !== id)
-  delete messagesMap.value[id]
-  if (activeSessionId.value === id) {
-    activeSessionId.value = sessions.value[0]?.id || ''
+/* -------------------------------- 会话操作 ------------------------------- */
+
+async function selectSession(id: string) {
+  activeSessionId.value = id
+  if (!messagesMap.value[id]) {
+    await loadMessages(id)
   }
-  message.success('已删除会话')
+  scrollToBottom()
 }
+
+async function createSession() {
+  try {
+    const session = await chatApi.createThread()
+    sessions.value.unshift(session)
+    messagesMap.value[session.id] = []
+    activeSessionId.value = session.id
+  } catch {
+    // 错误提示由 request 拦截器统一处理
+  }
+}
+
+async function deleteSession(id: string) {
+  try {
+    await chatApi.deleteThread(id)
+    sessions.value = sessions.value.filter((s) => s.id !== id)
+    delete messagesMap.value[id]
+    if (activeSessionId.value === id) {
+      const next = sessions.value[0]
+      if (next) {
+        await selectSession(next.id)
+      } else {
+        activeSessionId.value = ''
+      }
+    }
+    message.success('已删除会话')
+  } catch {
+    // 错误提示由 request 拦截器统一处理
+  }
+}
+
+/* -------------------------------- 发送消息 ------------------------------- */
 
 function sendSuggestedPrompt(text: string) {
   const t = text.trim()
@@ -84,60 +120,74 @@ function sendSuggestedPrompt(text: string) {
   handleSend()
 }
 
-function handleSend() {
+async function handleSend() {
   const content = inputValue.value.trim()
   if (!content || sending.value) return
-  if (!activeSessionId.value) createSession()
 
-  const userMsg: ChatMessage = {
-    id: `msg-${Date.now()}`,
-    role: 'user',
-    content,
-    createdAt: new Date().toLocaleString('zh-CN'),
+  // 没有激活会话时先建一个
+  if (!activeSessionId.value) {
+    await createSession()
+    if (!activeSessionId.value) return
   }
+  const sessionId = activeSessionId.value
 
-  if (!messagesMap.value[activeSessionId.value]) {
-    messagesMap.value[activeSessionId.value] = []
-  }
-  messagesMap.value[activeSessionId.value].push(userMsg)
-
-  const session = sessions.value.find((s) => s.id === activeSessionId.value)
-  if (session && session.title === '新对话') {
-    session.title = content.slice(0, 20)
-  }
+  const now = new Date().toISOString()
+  const list = messagesMap.value[sessionId] || (messagesMap.value[sessionId] = [])
+  list.push(
+    {
+      id: `local-user-${Date.now()}`,
+      role: 'user',
+      content,
+      citations: [],
+      created_at: now,
+    },
+    {
+      id: `local-assistant-${Date.now()}`,
+      role: 'assistant',
+      content: '',
+      citations: [],
+      created_at: now,
+      streaming: true,
+    },
+  )
+  // ref 在 push 时会把对象包成 reactive Proxy；必须用数组中的引用来修改，
+  // 否则直接改原对象的属性不会触发 set trap，SSE token 到来时视图不会更新。
+  const assistantMsg = list[list.length - 1] as ChatMessage
 
   inputValue.value = ''
-  scrollToBottom()
-  simulateAIResponse()
-}
-
-function simulateAIResponse() {
   sending.value = true
-  const thinkingMsg: ChatMessage = {
-    id: `msg-thinking-${Date.now()}`,
-    role: 'assistant',
-    content: '',
-    createdAt: new Date().toLocaleString('zh-CN'),
-  }
-  messagesMap.value[activeSessionId.value].push(thinkingMsg)
   scrollToBottom()
 
-  setTimeout(() => {
-    const msgs = messagesMap.value[activeSessionId.value]
-    const idx = msgs.findIndex((m) => m.id === thinkingMsg.id)
-    if (idx !== -1) {
-      msgs[idx] = {
-        ...thinkingMsg,
-        content:
-          '根据知识库中的资料，我为您整理了以下信息：\n\n这是一个模拟回复。后续接入后端 AI 接口后，这里将返回基于 RAG 知识库的真实回答。\n\n如果您有更具体的问题，请继续提问。',
-      }
-    }
-    sending.value = false
-    scrollToBottom()
-  }, 1500)
-}
+  currentStream = chatApi.streamAsk(sessionId, content, {
+    onCitations: (citations) => {
+      assistantMsg.citations = citations
+    },
+    onToken: (delta) => {
+      assistantMsg.content += delta
+      scrollToBottom()
+    },
+    onDone: ({ title }) => {
+      assistantMsg.streaming = false
+      const session = sessions.value.find((s) => s.id === sessionId)
+      if (session && title) session.title = title
+    },
+    onError: (err) => {
+      assistantMsg.streaming = false
+      assistantMsg.content = assistantMsg.content || `（请求失败：${err}）`
+      message.error(err || '请求失败')
+    },
+  })
 
-const activeSession = computed(() => sessions.value.find((s) => s.id === activeSessionId.value))
+  try {
+    await currentStream.done
+  } catch {
+    // 已在回调里 message.error
+  } finally {
+    sending.value = false
+    currentStream = null
+    scrollToBottom()
+  }
+}
 </script>
 
 <template>

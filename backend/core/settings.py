@@ -55,6 +55,25 @@ class Settings(BaseSettings):
     # 检索
     KNOWLEDGE_RETRIEVE_TOP_K: int = 5
 
+    # Agent（RAG 问答）
+    AGENT_SYSTEM_PROMPT: str = (
+        "你是运行智脑的电厂运行方面的 AI 助手，专注回答垃圾焚烧发电厂的运行方面的问题。"
+        "运行参数、运行指标、运行工况等相关问题。\n"
+        "回答要求：\n"
+        "1. 优先参考随后提供的【知识库片段】内容；\n"
+        "2. 引用的信息需要准确、可核对，能溯源的用 [#序号] 标注出处；\n"
+        "3. 若知识库与自身知识均无法确认答案，请直接说明不知道，不要臆造；\n"
+        "4. 输出使用简洁的中文 Markdown，结构清晰（分点、代码块等）。"
+    )
+    AGENT_TEMPERATURE: float = 0.3
+    AGENT_MAX_TOKENS: int = 1024
+    # pgvector 用的是 cosine distance，范围 0~2：
+    # - 0.0 ~ 0.35 ：高度相关
+    # - 0.35 ~ 0.55：相关，可作弱参考
+    # - 0.55 以上  ：基本无关，应丢弃
+    # 过宽会把无关的 CSV/表格片段也带进上下文，导致模型回答里出现无关引用。
+    AGENT_RAG_SCORE_MAX_DISTANCE: float = 0.45
+
     # 线程历史压缩
     THREAD_SUMMARY_TRIGGER_MSG_COUNT: int = 20
     THREAD_SUMMARY_TRIGGER_TOKEN_EST: int = 6000

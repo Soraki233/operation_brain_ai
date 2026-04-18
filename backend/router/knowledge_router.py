@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse
 from db.models.user import User
 from core.deps import get_current_user
@@ -151,28 +151,51 @@ async def get_knowledge_file_list(
 # 创建知识库文件（多文件）
 @knowledge_router.post("/files/upload", summary="创建知识库文件（多文件）")
 async def create_knowledge_file(
+    background_tasks: BackgroundTasks,
     kb_id: Annotated[str, Form(...)],
     files: Annotated[list[UploadFile], File(...)],
     folder_id: Annotated[str | None, Form(alias="folder_id")] = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """
+    上传文件接口只做落盘 + 写 pending 记录并立即返回，
+    向量切块入库通过 BackgroundTasks 在响应发送后异步执行，
+    前端通过轮询 parse_status 感知 pending -> success / failed 的状态变化。
+    """
     knowledge_files = []
     for file in files:
-        knowledge_files.append(
-            await KnowledgeRepo.create_knowledge_files(
-                kb_id,
-                folder_id,
-                file,
-                current_user.id,
-                db,
-            )
+        knowledge_file = await KnowledgeRepo.create_knowledge_files(
+            kb_id,
+            folder_id,
+            file,
+            current_user.id,
+            db,
         )
+        background_tasks.add_task(
+            KnowledgeRepo.ingest_file_in_background, knowledge_file.id
+        )
+        knowledge_files.append(knowledge_file)
     return success_response(
         data=[
             KnowledgeFileCreateResponseSchema.model_validate(item)
             for item in knowledge_files
         ]
+    )
+
+
+# 删除知识库文件（软删除 + 同步清理向量）
+@knowledge_router.delete("/files/{file_id}", summary="删除知识库文件")
+async def delete_knowledge_file(
+    file_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    knowledge_file = await KnowledgeRepo.delete_knowledge_file(
+        file_id, current_user, db
+    )
+    return success_response(
+        data=KnowledgeFileItemSchema.model_validate(knowledge_file)
     )
 
 

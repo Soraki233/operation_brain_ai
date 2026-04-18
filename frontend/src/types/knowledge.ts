@@ -91,6 +91,21 @@ export interface PagedResult<T> {
   total: number
 }
 
+/** Excel 工作簿单个 sheet 的预览片段
+ *
+ * 不再用 sheet_to_html 生成大段 DOM（几万行会把浏览器卡死），
+ * 改成二维数组交给 NDataTable 做虚拟滚动。
+ */
+export interface PreviewSheet {
+  name: string
+  /** 表头显示名（允许同名，key 在渲染侧用列下标保证唯一） */
+  columns: string[]
+  /** 数据行；每行数组长度固定 = columns.length，已按列对齐好 */
+  rows: string[][]
+  /** 空 sheet / 解析失败等无法表格化时的占位提示（优先级高于 columns/rows） */
+  placeholder?: string
+}
+
 /** 预览弹层状态 */
 export interface KnowledgePreviewModel {
   visible: boolean
@@ -101,8 +116,12 @@ export interface KnowledgePreviewModel {
   imageUrl?: string
   /** txt / markdown 源文本 */
   textContent?: string
-  /** mammoth / sheet_to_html 生成的 HTML */
+  /** mammoth / sheet_to_html 生成的 HTML（word / 单 sheet 的退路） */
   htmlContent?: string
+  /** Excel 多 sheet 列表 */
+  sheets?: PreviewSheet[]
+  /** 当前选中的 sheet 名 */
+  activeSheetName?: string
   /** 错误 / 不支持的提示 */
   errorMessage?: string
 }

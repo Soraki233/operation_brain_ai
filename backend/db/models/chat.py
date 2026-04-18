@@ -9,6 +9,9 @@ from db.session import BaseModel
 class ChatThread(BaseModel):
     __tablename__ = "chat_threads"
 
+    user_id: Mapped[str] = mapped_column(
+        String(100), nullable=False, index=True, comment="归属用户ID"
+    )
     title: Mapped[str] = mapped_column(
         String(200), nullable=False, default="新对话", comment="线程标题"
     )

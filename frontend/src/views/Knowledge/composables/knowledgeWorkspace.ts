@@ -124,6 +124,8 @@ export function createKnowledgeWorkspace() {
     imageUrl: undefined,
     textContent: undefined,
     htmlContent: undefined,
+    sheets: undefined,
+    activeSheetName: undefined,
     errorMessage: undefined,
   })
 
@@ -480,6 +482,8 @@ export function createKnowledgeWorkspace() {
     preview.imageUrl = undefined
     preview.textContent = undefined
     preview.htmlContent = undefined
+    preview.sheets = undefined
+    preview.activeSheetName = undefined
     preview.errorMessage = undefined
     try {
       const blob = await knowledgeApi.getFilePreviewBlob(file.id)
@@ -488,6 +492,8 @@ export function createKnowledgeWorkspace() {
       preview.imageUrl = built.imageUrl
       preview.textContent = built.textContent
       preview.htmlContent = built.htmlContent
+      preview.sheets = built.sheets
+      preview.activeSheetName = built.activeSheetName
       preview.errorMessage = built.errorMessage
     } catch {
       preview.errorMessage = '预览加载失败，请稍后重试。'
@@ -503,6 +509,15 @@ export function createKnowledgeWorkspace() {
     preview.imageUrl = undefined
     preview.textContent = undefined
     preview.htmlContent = undefined
+    preview.sheets = undefined
+    preview.activeSheetName = undefined
+  }
+
+  /** 切换 Excel 当前展示的 sheet */
+  function setActiveSheet(name: string) {
+    if (preview.sheets?.some((s) => s.name === name)) {
+      preview.activeSheetName = name
+    }
   }
 
   /* ---------------------------------- 展示辅助 ---------------------------------- */
@@ -586,6 +601,7 @@ export function createKnowledgeWorkspace() {
     requestConfirmUpload,
     openPreview,
     closePreview,
+    setActiveSheet,
     displayFileType,
     init,
   })

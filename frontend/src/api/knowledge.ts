@@ -9,7 +9,7 @@
  *   DELETE /knowledge/folder/delete  (body)                      -> deleteFolder
  *   GET    /knowledge/files/list   (query)                       -> listFiles
  *   PUT    /knowledge/files/update (body)                        -> renameFile / moveFile
- *   DELETE /knowledge/files/:id                                  -> deleteFile  (mock)
+ *   DELETE /knowledge/files/:id                                  -> deleteFile
  *   POST   /knowledge/files/upload (multipart/form-data)         -> uploadFiles
  *   GET    /knowledge/files/:id/preview (responseType: blob)     -> getFilePreviewBlob
  */
@@ -183,12 +183,14 @@ export async function moveFile(
   return res.data
 }
 
-/** 删除文件 */
+/**
+ * 删除文件
+ *
+ * 后端会软删除 DB 记录并同步清理该文件对应的向量（按 file_id:chunk_index 主键）。
+ * 物理文件保留在磁盘上，便于后续恢复或审计。
+ */
 export async function deleteFile(fileId: string): Promise<void> {
-  // 真实实现: return request.delete(`/knowledge/files/${fileId}`)
-  await mockDelay(180)
-  if (!mockFiles.some((f) => f.id === fileId)) throw new Error('文件不存在')
-  mockFiles = mockFiles.filter((f) => f.id !== fileId)
+  await request.delete(`/knowledge/files/${fileId}`)
 }
 
 function extFromFile(file: File): string {

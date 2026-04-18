@@ -1,4 +1,6 @@
-from db.session import AsyncSession
+import logging
+
+from db.session import AsyncSession, AsyncSessionLocal
 from db.models import KnowledgeBase as KnowledgeBaseModel
 from db.models import KnowledgeFolder as KnowledgeFolderModel
 from schema.knowledge_schema import (
@@ -18,6 +20,9 @@ from schema.knowledge_schema import KnowledgeFolderDeleteSchema
 from db.models.user import User
 from core.deps import get_current_user, get_db
 from db.models.user import UserRole as UserRoleModel
+from service.knowledge_ingest_service import KnowledgeIngestService
+
+logger = logging.getLogger(__name__)
 
 
 class KnowledgeRepo:
@@ -192,11 +197,26 @@ class KnowledgeRepo:
             )
         )
         knowledge_files = knowledge_files.scalars().all()
-        # 遍历并软删除文件
+        # 遍历并软删除文件，同步清理向量
+        ingest_service = KnowledgeIngestService() if knowledge_files else None
         for knowledge_file in knowledge_files:
+            chunk_count = knowledge_file.chunk_count or 0
             knowledge_file.is_deleted = 1  # 软删除文件
             await db.commit()
             await db.refresh(knowledge_file)
+            if chunk_count > 0:
+                try:
+                    await asyncio.to_thread(
+                        ingest_service.delete_file_vectors,
+                        file_id=knowledge_file.id,
+                        chunk_count=chunk_count,
+                    )
+                except Exception:
+                    logger.exception(
+                        "清理向量失败: file_id=%s, chunk_count=%s",
+                        knowledge_file.id,
+                        chunk_count,
+                    )
         # 查询活跃且未被删除的文件夹
         knowledge_folder = await db.execute(
             select(KnowledgeFolderModel).where(
@@ -227,7 +247,9 @@ class KnowledgeRepo:
         return result.scalar_one_or_none()
 
     # 更新知识库文件：支持重命名（file_name）/ 移动（folder_id、move_to_root）
-    # 物理文件 storage_path 保持不变，仅更新数据库字段
+    # 物理文件 storage_path 保持不变，仅更新数据库字段；
+    # 向量库（pgvector）以 file_id 作为主键前缀存储，与 file_name / folder_id 解耦，
+    # 因此重命名 / 移动过程无需重新 ingest，也无需清理旧向量。
     @staticmethod
     async def update_knowledge_file(
         data: KnowledgeFileUpdateSchema,
@@ -354,34 +376,32 @@ class KnowledgeRepo:
     async def create_knowledge_files(
         kb_id: str,
         folder_id: str | None,
-        file: UploadFile,
+        upload_file: UploadFile,
         uploaded_by: str,
         db: AsyncSession,
     ) -> KnowledgeFileModel:
-        # 获取文件后缀
-        suffix = Path(file.filename).suffix.lower()
-        # 读取文件内容
-        content = await file.read()
-        # 生成文件物理名称
+        """
+        创建知识库文件（只负责落盘 + 插入 pending 记录）：
+        1. 将上传内容写入本地磁盘（storage/knowledge/<kb_id>/<uuid><ext>）。
+        2. 插入 knowledge_file 记录，初始 parse_status=pending、chunk_count=0。
+
+        向量入库由 ingest_file_in_background 作为后台任务异步执行，
+        以避免阻塞上传接口的响应。
+        """
+        suffix = Path(upload_file.filename).suffix.lower()
+        content = await upload_file.read()
         physical_name = f"{uuid4().hex}{suffix}"
-        # 生成文件保存目录
         save_dir = Path(settings.KNOWLEDGE_UPLOAD_DIR) / kb_id
-        # 创建文件保存目录
         save_dir.mkdir(parents=True, exist_ok=True)
-        # 生成文件保存路径
         save_path = save_dir / physical_name
-        # 写入文件内容
-        await asyncio.to_thread(
-            save_path.write_bytes,
-            content,
-        )
-        # 创建知识库文件对象
-        file = KnowledgeFileModel(
+        await asyncio.to_thread(save_path.write_bytes, content)
+
+        knowledge_file = KnowledgeFileModel(
             kb_id=kb_id,
             folder_id=folder_id,
-            file_name=file.filename,
+            file_name=upload_file.filename,
             file_ext=suffix,
-            mime_type=file.content_type,
+            mime_type=upload_file.content_type,
             file_size=len(content),
             storage_path=str(save_path),
             parse_status="pending",
@@ -389,10 +409,169 @@ class KnowledgeRepo:
             uploaded_by=uploaded_by,
             error_message=None,
         )
-        db.add(file)
+        db.add(knowledge_file)
         await db.commit()
-        await db.refresh(file)
-        return file
+        await db.refresh(knowledge_file)
+        return knowledge_file
+
+    @staticmethod
+    async def ingest_file_in_background(file_id: str) -> None:
+        """
+        后台异步执行文件切块 + 向量入库。
+
+        - 通过 AsyncSessionLocal 自行管理 session，
+          不依赖请求生命周期（请求返回时 get_db 产生的 session 已关闭）。
+        - 同步阻塞的 ingest 逻辑放入线程池，避免占用事件循环。
+        - 任意异常都会被捕获并写回 parse_status=failed + error_message，
+          便于前端在文件列表中展示失败原因。
+        - 起步先把状态置为 processing 并提交一次，这样前端轮询能立刻看到
+          "处理中"，避免排队/热重载时用户看到"待处理"一直不变。
+        """
+        # 1) 先把状态切成 processing 并提交，跟主 ingest 过程完全解耦的短事务
+        async with AsyncSessionLocal() as session:
+            knowledge_file = await KnowledgeRepo.get_knowledge_file_by_id(
+                file_id, session
+            )
+            if not knowledge_file:
+                return
+            if knowledge_file.parse_status != "processing":
+                knowledge_file.parse_status = "processing"
+                knowledge_file.error_message = None
+                await session.commit()
+            storage_path = knowledge_file.storage_path
+            kb_id = knowledge_file.kb_id
+
+        # 2) 真正的 ingest 过程放在外层，完成后再开新 session 写结果。
+        #    这样 ingest 阶段（可能数分钟）不占住任何 DB 连接。
+        logger.info("[INGEST] 开始处理 file_id=%s path=%s", file_id, storage_path)
+        try:
+            ingest_service = KnowledgeIngestService()
+            result = await asyncio.to_thread(
+                ingest_service.ingest_file,
+                kb_id=kb_id,
+                file_id=file_id,
+                file_path=storage_path,
+            )
+            status = "success"
+            chunk_count = result.get("chunk_count", 0)
+            error_message = None
+            logger.info(
+                "[INGEST] 完成 file_id=%s status=success chunks=%d",
+                file_id,
+                chunk_count,
+            )
+        except Exception as e:
+            logger.exception("[INGEST] 失败 file_id=%s", file_id)
+            status = "failed"
+            chunk_count = 0
+            error_message = str(e)
+
+        # 3) 单独一个短事务写回结果，避免 ingest 阶段 DB 连接 idle 超时
+        async with AsyncSessionLocal() as session:
+            knowledge_file = await KnowledgeRepo.get_knowledge_file_by_id(
+                file_id, session
+            )
+            if not knowledge_file:
+                return
+            knowledge_file.parse_status = status
+            knowledge_file.chunk_count = chunk_count
+            knowledge_file.error_message = error_message
+            await session.commit()
+
+    @staticmethod
+    async def requeue_unfinished_files() -> None:
+        """启动时兜底：把所有停在 pending/processing 的文件重新处理一遍。
+
+        典型场景：`fastapi dev` 热重载 / 进程重启时，正在跑的 BackgroundTasks
+        会被直接杀掉，对应记录就永远卡在 pending/processing。
+        - 物理文件还在 -> 重新投递异步 ingest；
+        - 物理文件丢失 -> 直接标 failed，避免前端一直 loading。
+        """
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(KnowledgeFileModel).where(
+                    KnowledgeFileModel.parse_status.in_(["pending", "processing"]),
+                    KnowledgeFileModel.is_deleted == 0,
+                )
+            )
+            pending_files = result.scalars().all()
+
+            if not pending_files:
+                return
+
+            logger.info(
+                "[INGEST] 启动兜底扫描：发现 %d 个未完成的文件", len(pending_files)
+            )
+            to_resume: list[str] = []
+            for f in pending_files:
+                if f.storage_path and Path(f.storage_path).is_file():
+                    to_resume.append(f.id)
+                    logger.info(
+                        "[INGEST] 重新入队: id=%s name=%s status=%s",
+                        f.id,
+                        f.file_name,
+                        f.parse_status,
+                    )
+                else:
+                    f.parse_status = "failed"
+                    f.chunk_count = 0
+                    f.error_message = "服务重启前未完成处理，且物理文件已丢失"
+                    logger.warning(
+                        "[INGEST] 物理文件缺失，标记 failed: id=%s name=%s path=%s",
+                        f.id,
+                        f.file_name,
+                        f.storage_path,
+                    )
+            await session.commit()
+
+        for file_id in to_resume:
+            asyncio.create_task(KnowledgeRepo.ingest_file_in_background(file_id))
+
+    @staticmethod
+    async def delete_knowledge_file(
+        file_id: str,
+        do_delete_user: User,
+        db: AsyncSession,
+    ) -> KnowledgeFileModel:
+        """
+        删除知识库文件：
+        1. 权限校验。
+        2. 数据库记录软删除（is_deleted=1）。
+        3. 同步清理该文件对应的向量（id 形如 "<file_id>:<chunk_index>"）。
+           向量清理失败不会回滚数据库软删，仅记录日志，避免残留孤立向量阻塞业务。
+        物理文件保留在磁盘上，便于后续恢复或审计。
+        """
+        knowledge_file = await KnowledgeRepo.get_knowledge_file_by_id(file_id, db)
+        if not knowledge_file:
+            raise HTTPException(status_code=400, detail="文件不存在")
+
+        has_knowledge_permission = await get_has_knowledge_permission(
+            knowledge_file.kb_id, do_delete_user, db
+        )
+        if not has_knowledge_permission:
+            raise HTTPException(status_code=400, detail="您没有该权限")
+
+        chunk_count = knowledge_file.chunk_count or 0
+        knowledge_file.is_deleted = 1
+        await db.commit()
+        await db.refresh(knowledge_file)
+
+        if chunk_count > 0:
+            try:
+                ingest_service = KnowledgeIngestService()
+                await asyncio.to_thread(
+                    ingest_service.delete_file_vectors,
+                    file_id=knowledge_file.id,
+                    chunk_count=chunk_count,
+                )
+            except Exception:
+                logger.exception(
+                    "清理向量失败: file_id=%s, chunk_count=%s",
+                    knowledge_file.id,
+                    chunk_count,
+                )
+        return knowledge_file
+
 
 
 async def get_has_knowledge_permission(

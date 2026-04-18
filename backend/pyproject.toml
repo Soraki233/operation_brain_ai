@@ -32,7 +32,6 @@ dependencies = [
     "langchain-community>=0.4.1",
     "langchain-postgres>=0.0.17",
     "docx2txt>=0.9",
-    "unstructured>=0.22.21",
     "psycopg[binary]>=3.3.3",
     "dashscope>=1.25.17",
 ]
