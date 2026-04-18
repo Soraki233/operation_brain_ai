@@ -197,26 +197,19 @@ class KnowledgeRepo:
             )
         )
         knowledge_files = knowledge_files.scalars().all()
-        # 遍历并软删除文件，同步清理向量
+        # 遍历并软删除文件，同步清理向量（元数据过滤，无论 chunk_count 是多少）
         ingest_service = KnowledgeIngestService() if knowledge_files else None
         for knowledge_file in knowledge_files:
-            chunk_count = knowledge_file.chunk_count or 0
             knowledge_file.is_deleted = 1  # 软删除文件
             await db.commit()
             await db.refresh(knowledge_file)
-            if chunk_count > 0:
-                try:
-                    await asyncio.to_thread(
-                        ingest_service.delete_file_vectors,
-                        file_id=knowledge_file.id,
-                        chunk_count=chunk_count,
-                    )
-                except Exception:
-                    logger.exception(
-                        "清理向量失败: file_id=%s, chunk_count=%s",
-                        knowledge_file.id,
-                        chunk_count,
-                    )
+            try:
+                await asyncio.to_thread(
+                    ingest_service.delete_file_vectors,
+                    file_id=knowledge_file.id,
+                )
+            except Exception:
+                logger.exception("清理向量失败: file_id=%s", knowledge_file.id)
         # 查询活跃且未被删除的文件夹
         knowledge_folder = await db.execute(
             select(KnowledgeFolderModel).where(
@@ -481,6 +474,22 @@ class KnowledgeRepo:
                 file_id, session
             )
             if not knowledge_file:
+                # 文件在 ingest 期间被软删除，需清理刚写入的孤立向量
+                if status == "success" and chunk_count > 0:
+                    logger.warning(
+                        "[INGEST] 文件已被软删除，清理孤立向量 file_id=%s chunks=%d",
+                        file_id,
+                        chunk_count,
+                    )
+                    try:
+                        await asyncio.to_thread(
+                            ingest_service.delete_file_vectors,
+                            file_id=file_id,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "[INGEST] 清理孤立向量失败 file_id=%s", file_id
+                        )
                 return
             knowledge_file.parse_status = status
             knowledge_file.chunk_count = chunk_count
@@ -560,25 +569,19 @@ class KnowledgeRepo:
         if not has_knowledge_permission:
             raise HTTPException(status_code=400, detail="您没有该权限")
 
-        chunk_count = knowledge_file.chunk_count or 0
         knowledge_file.is_deleted = 1
         await db.commit()
         await db.refresh(knowledge_file)
 
-        if chunk_count > 0:
-            try:
-                ingest_service = KnowledgeIngestService()
-                await asyncio.to_thread(
-                    ingest_service.delete_file_vectors,
-                    file_id=knowledge_file.id,
-                    chunk_count=chunk_count,
-                )
-            except Exception:
-                logger.exception(
-                    "清理向量失败: file_id=%s, chunk_count=%s",
-                    knowledge_file.id,
-                    chunk_count,
-                )
+        # 无论 chunk_count 是多少，都尝试清理向量（元数据过滤，无副作用）
+        try:
+            ingest_service = KnowledgeIngestService()
+            await asyncio.to_thread(
+                ingest_service.delete_file_vectors,
+                file_id=knowledge_file.id,
+            )
+        except Exception:
+            logger.exception("清理向量失败: file_id=%s", knowledge_file.id)
         return knowledge_file
 
 

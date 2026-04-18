@@ -9,6 +9,7 @@ from typing import List
 from xml.etree import ElementTree as ET
 
 import pandas as pd
+from sqlalchemy import delete as sa_delete
 
 logger = logging.getLogger(__name__)
 from langchain_core.documents import Document
@@ -607,11 +608,33 @@ class KnowledgeIngestService:
 
         return RuntimeError(f"[batch_offset={batch_index}] {msg}")
 
-    def delete_file_vectors(self, *, file_id: str, chunk_count: int) -> None:
-        if chunk_count <= 0:
-            return
-        ids = [f"{file_id}:{i}" for i in range(chunk_count)]
-        self.vector_store.delete(ids=ids)
+    def delete_file_vectors(self, *, file_id: str, chunk_count: int = 0) -> int:
+        """删除指定文件的全部向量，按 cmetadata['file_id'] 过滤。
+
+        不再依赖 chunk_count（保留参数仅为向后兼容），因此即使文件在
+        ingest 期间被软删除导致 chunk_count=0，也能正确清理孤立向量。
+        返回实际删除的行数。
+        """
+        store = self.vector_store
+        with store._make_sync_session() as session:
+            collection = store.get_collection(session)
+            if not collection:
+                logger.warning(
+                    "[VECTOR] collection 不存在，跳过删除 file_id=%s", file_id
+                )
+                return 0
+            stmt = (
+                sa_delete(store.EmbeddingStore)
+                .where(store.EmbeddingStore.collection_id == collection.uuid)
+                .where(
+                    store.EmbeddingStore.cmetadata["file_id"].astext == file_id
+                )
+            )
+            result = session.execute(stmt)
+            session.commit()
+            deleted = result.rowcount
+            logger.info("[VECTOR] 删除向量 file_id=%s rows=%d", file_id, deleted)
+            return deleted
 
     @staticmethod
     def _load_word_doc(path: Path) -> List[Document]:
