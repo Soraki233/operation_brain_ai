@@ -9,7 +9,7 @@
  * 状态集中在 createKnowledgeWorkspace()，通过 provide 注入给子组件。
  */
 import { onMounted, provide } from 'vue'
-import { NButton, NInput, NModal } from 'naive-ui'
+import { NButton, NInput, NModal, NSelect } from 'naive-ui'
 import KnowledgeFilePanel from './components/KnowledgeFilePanel.vue'
 import KnowledgePreviewDrawer from './components/KnowledgePreviewDrawer.vue'
 import KnowledgeSidebar from './components/KnowledgeSidebar.vue'
@@ -112,6 +112,41 @@ onMounted(() => {
             type="primary"
             :loading="workspace.renameState.submitting"
             @click="workspace.submitRename"
+          >
+            确定
+          </NButton>
+        </div>
+      </template>
+    </NModal>
+
+    <!-- 移动文件 -->
+    <NModal
+      v-model:show="workspace.moveState.visible"
+      preset="card"
+      title="移动文件"
+      :style="{ width: '460px' }"
+      :mask-closable="false"
+      @close="workspace.closeMoveDialog"
+    >
+      <div class="rename-hint">
+        <span class="rename-hint-label">文件</span>
+        <span class="rename-hint-value" :title="workspace.moveState.originalName">
+          {{ workspace.moveState.originalName || '-' }}
+        </span>
+      </div>
+      <NSelect
+        :value="workspace.moveState.targetFolderId ?? '__root__'"
+        :options="workspace.moveFolderOptions"
+        placeholder="请选择目标文件夹"
+        @update:value="(v) => (workspace.moveState.targetFolderId = v === '__root__' ? null : v)"
+      />
+      <template #footer>
+        <div class="modal-footer">
+          <NButton quaternary @click="workspace.closeMoveDialog">取消</NButton>
+          <NButton
+            type="primary"
+            :loading="workspace.moveState.submitting"
+            @click="workspace.submitMoveFile"
           >
             确定
           </NButton>

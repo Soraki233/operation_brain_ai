@@ -38,6 +38,14 @@ export interface KnowledgeFolderCreateSchema {
   kb_id: Knowledgekb_id
   name: string
 }
+
+/** 更新文件（重命名 / 移动） */
+export interface KnowledgeFileUpdateSchema {
+  id: string
+  file_name?: string
+  folder_id?: string
+  move_to_root?: boolean
+}
 /** 文件元信息 */
 export interface KnowledgeFile {
   id: string

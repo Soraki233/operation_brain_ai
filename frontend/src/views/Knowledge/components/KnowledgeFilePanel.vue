@@ -252,6 +252,14 @@ const columns: DataTableColumns<KnowledgeFile> = [
           '重命名',
         ),
         h(
+          'a',
+          {
+            class: 'link-btn link-btn--primary',
+            onClick: () => workspace.openMoveFile(row),
+          },
+          '移动',
+        ),
+        h(
           NPopconfirm,
           {
             positiveText: '删除',

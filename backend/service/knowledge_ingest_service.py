@@ -12,6 +12,7 @@ from langchain_community.document_loaders import (
 )
 
 from service.vector_store_service import VectorStoreService
+from core.settings import settings
 
 
 class KnowledgeIngestService:
@@ -55,9 +56,23 @@ class KnowledgeIngestService:
         file_id: str,
     ) -> List[Document]:
         splitter = RecursiveCharacterTextSplitter(
-            chunk_size=800,
-            chunk_overlap=120,
-            separators=["\n\n", "\n", "。", "！", "？", "；", "，", " ", ""],
+            chunk_size=settings.KNOWLEDGE_CHUNK_SIZE,
+            chunk_overlap=settings.KNOWLEDGE_CHUNK_OVERLAP,
+            separators=[
+                "\n\n",
+                "\n",
+                "。",
+                "！",
+                "？",
+                "；",
+                "，",
+                " ",
+                "",
+                ",",
+                "\t",
+                "\r",
+                "\s",
+            ],
         )
 
         normalized_docs: List[Document] = []

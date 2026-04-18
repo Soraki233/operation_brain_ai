@@ -5,6 +5,7 @@ from schema.knowledge_schema import (
     KnowledgeBaseCreateSchema,
     KnowledgeFolderCreateSchema,
     KnowledgeFolderUpdateSchema,
+    KnowledgeFileUpdateSchema,
 )
 from sqlalchemy import select, func
 from db.models import KnowledgeFile as KnowledgeFileModel
@@ -211,6 +212,98 @@ class KnowledgeRepo:
         await db.commit()
         await db.refresh(knowledge_folder)
         return knowledge_folder
+
+    @staticmethod
+    async def get_knowledge_file_by_id(
+        file_id: str, db: AsyncSession
+    ) -> KnowledgeFileModel | None:
+        """根据文件ID查询未被软删除的知识库文件记录。"""
+        result = await db.execute(
+            select(KnowledgeFileModel).where(
+                KnowledgeFileModel.id == file_id,
+                KnowledgeFileModel.is_deleted == 0,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    # 更新知识库文件：支持重命名（file_name）/ 移动（folder_id、move_to_root）
+    # 物理文件 storage_path 保持不变，仅更新数据库字段
+    @staticmethod
+    async def update_knowledge_file(
+        data: KnowledgeFileUpdateSchema,
+        do_update_user: User,
+        db: AsyncSession,
+    ) -> KnowledgeFileModel:
+        knowledge_file = await KnowledgeRepo.get_knowledge_file_by_id(data.id, db)
+        if not knowledge_file:
+            raise HTTPException(status_code=400, detail="文件不存在")
+
+        has_knowledge_permission = await get_has_knowledge_permission(
+            knowledge_file.kb_id, do_update_user, db
+        )
+        if not has_knowledge_permission:
+            raise HTTPException(status_code=400, detail="您没有该权限")
+
+        # 1) 目标文件夹：move_to_root 优先，其次 folder_id；未传则保持原值
+        target_folder_id = knowledge_file.folder_id
+        if data.move_to_root:
+            target_folder_id = None
+        elif data.folder_id is not None:
+            folder_result = await db.execute(
+                select(KnowledgeFolderModel).where(
+                    KnowledgeFolderModel.id == data.folder_id,
+                    KnowledgeFolderModel.kb_id == knowledge_file.kb_id,
+                    KnowledgeFolderModel.is_active == 1,
+                    KnowledgeFolderModel.is_deleted == 0,
+                )
+            )
+            if folder_result.scalar_one_or_none() is None:
+                raise HTTPException(
+                    status_code=400, detail="目标文件夹不存在或不属于该知识库"
+                )
+            target_folder_id = data.folder_id
+
+        # 2) 目标文件名：未带扩展名时自动拼回原扩展名，避免用户误删后缀
+        target_file_name = knowledge_file.file_name
+        target_file_ext = knowledge_file.file_ext
+        if data.file_name is not None:
+            trimmed = data.file_name.strip()
+            if not trimmed:
+                raise HTTPException(status_code=400, detail="文件名不能为空")
+            has_ext = "." in trimmed
+            target_file_name = (
+                trimmed
+                if has_ext or not knowledge_file.file_ext
+                else f"{trimmed}{knowledge_file.file_ext}"
+            )
+            target_file_ext = (
+                Path(target_file_name).suffix.lower() or knowledge_file.file_ext
+            )
+
+        # 3) 同目录下文件名唯一性校验
+        dup_conditions = [
+            KnowledgeFileModel.kb_id == knowledge_file.kb_id,
+            KnowledgeFileModel.file_name == target_file_name,
+            KnowledgeFileModel.id != knowledge_file.id,
+            KnowledgeFileModel.is_deleted == 0,
+        ]
+        if target_folder_id is None:
+            dup_conditions.append(KnowledgeFileModel.folder_id.is_(None))
+        else:
+            dup_conditions.append(KnowledgeFileModel.folder_id == target_folder_id)
+
+        duplicate = await db.execute(
+            select(KnowledgeFileModel).where(*dup_conditions)
+        )
+        if duplicate.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="当前目录下已存在同名文件")
+
+        knowledge_file.file_name = target_file_name
+        knowledge_file.file_ext = target_file_ext
+        knowledge_file.folder_id = target_folder_id
+        await db.commit()
+        await db.refresh(knowledge_file)
+        return knowledge_file
 
     @staticmethod
     async def get_knowledge_file_list(

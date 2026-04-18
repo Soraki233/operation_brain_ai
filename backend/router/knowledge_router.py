@@ -1,6 +1,8 @@
+from pathlib import Path
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi.responses import FileResponse
 from db.models.user import User
 from core.deps import get_current_user
 from repository.knowledge_repo import KnowledgeRepo
@@ -15,6 +17,7 @@ from schema.knowledge_schema import KnowledgeFolderResponseSchema
 from schema.knowledge_schema import KnowledgeFolderUpdateSchema
 from schema.knowledge_schema import KnowledgeFileCreateResponseSchema
 from schema.knowledge_schema import KnowledgeFileItemSchema
+from schema.knowledge_schema import KnowledgeFileUpdateSchema
 from schema.response import PagedResponseSchema
 from schema.knowledge_schema import KnowledgeFolderDeleteSchema
 
@@ -170,5 +173,46 @@ async def create_knowledge_file(
             KnowledgeFileCreateResponseSchema.model_validate(item)
             for item in knowledge_files
         ]
+    )
+
+
+# 更新知识库文件（重命名 / 移动）
+@knowledge_router.put("/files/update", summary="更新知识库文件（重命名 / 移动）")
+async def update_knowledge_file(
+    knowledge_file_update: KnowledgeFileUpdateSchema,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    knowledge_file = await KnowledgeRepo.update_knowledge_file(
+        knowledge_file_update, current_user, db
+    )
+    return success_response(
+        data=KnowledgeFileItemSchema.model_validate(knowledge_file)
+    )
+
+
+# 获取知识库文件（二进制流，用于在线预览）
+@knowledge_router.get(
+    "/files/{file_id}/preview",
+    summary="获取知识库文件（二进制流，用于在线预览）",
+)
+async def get_knowledge_file_preview(
+    file_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    knowledge_file = await KnowledgeRepo.get_knowledge_file_by_id(file_id, db)
+    if not knowledge_file:
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    storage_path = Path(knowledge_file.storage_path)
+    if not storage_path.exists() or not storage_path.is_file():
+        raise HTTPException(status_code=404, detail="文件物理存储已丢失")
+
+    return FileResponse(
+        path=str(storage_path),
+        media_type=knowledge_file.mime_type or "application/octet-stream",
+        filename=knowledge_file.file_name,
+        content_disposition_type="inline",
     )
 

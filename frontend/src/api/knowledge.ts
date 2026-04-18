@@ -1,28 +1,17 @@
 /**
  * 知识库 API 封装
  *
- * ============================================================================
- * 【当前为 MOCK 实现】
- *   - 数据保存在内存（刷新页面会重置）。
- *   - 通过 mockDelay 模拟网络延迟，方便观察 loading 态。
- *
- * 【替换为真实后端时】
- *   1) 删除下方 mock 存储与 mockDelay，改用项目统一 HTTP 封装：
- *        import request from '@/utils/request'
- *   2) 建议接口（可按后端实际调整）：
- *        GET    /knowledge/libraries                                 -> listLibraries
- *        GET    /knowledge/folders?kb_id=                        -> listFolders
- *        POST   /knowledge/folders                                   -> createFolder
- *        PATCH  /knowledge/folders/:id   { name }                    -> renameFolder
- *        DELETE /knowledge/folders/:id                               -> deleteFolder
- *        GET    /knowledge/files                                     -> listFiles
- *          (query: kb_id, folder_id, keyword, page, pageSize)
- *        PATCH  /knowledge/files/:id     { name }                    -> renameFile
- *        DELETE /knowledge/files/:id                                 -> deleteFile
- *        POST   /knowledge/files/upload  (multipart/form-data)       -> uploadFiles
- *        GET    /knowledge/files/:id/preview (responseType: blob)    -> getFilePreviewBlob
- *   3) 保持本文件对外的函数签名不变，上层页面/组件无需修改。
- * ============================================================================
+ * 对接后端接口：
+ *   GET    /knowledge/list                                       -> listLibraries
+ *   GET    /knowledge/folder/list?kb_id=                         -> listFolders
+ *   POST   /knowledge/folder/create                              -> createFolder
+ *   PUT    /knowledge/folder/update                              -> renameFolder
+ *   DELETE /knowledge/folder/delete  (body)                      -> deleteFolder
+ *   GET    /knowledge/files/list   (query)                       -> listFiles
+ *   PUT    /knowledge/files/update (body)                        -> renameFile / moveFile
+ *   DELETE /knowledge/files/:id                                  -> deleteFile  (mock)
+ *   POST   /knowledge/files/upload (multipart/form-data)         -> uploadFiles
+ *   GET    /knowledge/files/:id/preview (responseType: blob)     -> getFilePreviewBlob
  */
 
 import type {
@@ -36,6 +25,7 @@ import type {
   KnowledgeFolderCreateSchema,
   KnowledgeFolderUpdateSchema,
   KnowledgeFolderDeleteSchema,
+  KnowledgeFileUpdateSchema,
 } from '@/types/knowledge'
 import request from '@/utils/request'
 
@@ -89,24 +79,6 @@ let mockFiles: KnowledgeFile[] = [
     parse_status: 'pending',
   },
 ]
-
-/** Mock 文件二进制缓存（真实后端走下载接口即可） */
-const mockBlobStore = new Map<string, Blob>()
-
-function seedBlobForFile(file: KnowledgeFile, content: string, mime: string) {
-  mockBlobStore.set(file.id, new Blob([content], { type: mime }))
-}
-
-seedBlobForFile(
-  mockFiles[0],
-  '# 欢迎使用知识库\n\n这是一个 **mock** 示例 Markdown 文件。\n\n- 支持图片 / txt / md / excel / word 预览\n- 支持搜索与分页\n',
-  'text/markdown',
-)
-seedBlobForFile(
-  mockFiles[1],
-  '示例文本内容：\n1. 检查网络连通性\n2. 重启相关服务\n3. 记录处理过程\n',
-  'text/plain',
-)
 
 /* --------------------------------- API 封装 --------------------------------- */
 
@@ -172,62 +144,43 @@ export async function listFiles(
   return res.data
 }
 
-/** 根据文件名推断扩展名（小写，不含点） */
-function extFromName(name: string): string {
-  const i = name.lastIndexOf('.')
-  return i <= 0 || i === name.length - 1 ? '' : name.slice(i + 1).toLowerCase()
-}
-
 /**
  * 重命名文件
  *
- * 规则：
- * - 用户传入完整新文件名（可包含扩展名），内部重新推断 extension。
- * - 若未包含扩展名，则沿用原扩展名（避免用户误删后缀）。
- * - 同一 library + folder 下的文件名必须唯一。
+ * 规则（后端同样会校验）：
+ * - 文件名非空；未带扩展名时后端自动拼回原扩展名。
+ * - 同一知识库 + 文件夹下的文件名必须唯一。
  */
 export async function renameFile(
   fileId: string,
   name: string,
 ): Promise<KnowledgeFile> {
-  // 真实实现: return request.patch<KnowledgeFile>(`/knowledge/files/${fileId}`, { name })
-  await mockDelay(200)
-  const trimmed = name.trim()
-  if (!trimmed) throw new Error('文件名不能为空')
+  const body: KnowledgeFileUpdateSchema = { id: fileId, file_name: name.trim() }
+  const res = await request.put<{ data: KnowledgeFile }>(
+    '/knowledge/files/update',
+    body,
+  )
+  return res.data
+}
 
-  const target = mockFiles.find((f) => f.id === fileId)
-  if (!target) throw new Error('文件不存在')
-
-  // 如果用户没写扩展名，自动补回原扩展名
-  const hasExt = trimmed.includes('.')
-  const finalName = hasExt
-    ? trimmed
-    : target.file_ext
-      ? `${trimmed}.${target.file_ext}`
-      : trimmed
-  const finalExt = extFromName(finalName) || target.file_ext
-
-  // 同目录下重名校验
-  if (
-    mockFiles.some(
-      (f) =>
-        f.id !== fileId &&
-        f.kb_id === target.kb_id &&
-        f.folder_id === target.folder_id &&
-        f.file_name === finalName,
-    )
-  ) {
-    throw new Error('当前目录下已存在同名文件')
-  }
-
-  const updated: KnowledgeFile = {
-    ...target,
-    file_name: finalName,
-    file_ext: finalExt,
-    created_at: nowIso(),
-  }
-  mockFiles = mockFiles.map((f) => (f.id === fileId ? updated : f))
-  return updated
+/**
+ * 移动文件
+ *
+ * - folder_id 为 null 表示移动到知识库根目录（后端走 move_to_root=true 分支）。
+ * - 只允许在同一知识库内移动；目标文件夹由后端做二次校验。
+ */
+export async function moveFile(
+  fileId: string,
+  folder_id: string | null,
+): Promise<KnowledgeFile> {
+  const body: KnowledgeFileUpdateSchema = folder_id
+    ? { id: fileId, folder_id }
+    : { id: fileId, move_to_root: true }
+  const res = await request.put<{ data: KnowledgeFile }>(
+    '/knowledge/files/update',
+    body,
+  )
+  return res.data
 }
 
 /** 删除文件 */
@@ -235,7 +188,6 @@ export async function deleteFile(fileId: string): Promise<void> {
   // 真实实现: return request.delete(`/knowledge/files/${fileId}`)
   await mockDelay(180)
   if (!mockFiles.some((f) => f.id === fileId)) throw new Error('文件不存在')
-  mockBlobStore.delete(fileId)
   mockFiles = mockFiles.filter((f) => f.id !== fileId)
 }
 
@@ -279,16 +231,9 @@ export async function uploadFiles(
   // return created
 }
 
-/** 获取文件二进制（用于预览，真实后端应以 blob 方式下载） */
+/** 获取文件二进制（用于预览，后端直接返回 FileResponse） */
 export async function getFilePreviewBlob(fileId: string): Promise<Blob> {
-  // 真实实现:
-  //   return request.get<Blob>(`/knowledge/files/${fileId}/preview`, { responseType: 'blob' })
-  await mockDelay(120)
-  const blob = mockBlobStore.get(fileId)
-  if (!blob) {
-    return new Blob(['该文件暂无可用内容（mock 未写入二进制）。'], {
-      type: 'text/plain;charset=utf-8',
-    })
-  }
-  return blob
+  return request.get<Blob>(`/knowledge/files/${fileId}/preview`, {
+    responseType: 'blob',
+  })
 }

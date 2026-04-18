@@ -98,6 +98,23 @@ export function createKnowledgeWorkspace() {
     submitting: false,
   })
 
+  // 移动文件
+  const moveState = reactive<{
+    visible: boolean
+    targetId: string | null
+    /** 原文件名，仅用于弹窗提示 */
+    originalName: string
+    /** null 表示知识库根目录 */
+    targetFolderId: string | null
+    submitting: boolean
+  }>({
+    visible: false,
+    targetId: null,
+    originalName: '',
+    targetFolderId: null,
+    submitting: false,
+  })
+
   // 预览
   const preview = reactive<KnowledgePreviewModel>({
     visible: false,
@@ -321,6 +338,61 @@ export function createKnowledgeWorkspace() {
     }
   }
 
+  /* --------------------------------- 移动文件弹窗 --------------------------------- */
+
+  /**
+   * 当前文件可选的移动目标：文件所在库下的全部文件夹，额外加一个虚拟"根目录"项。
+   * NSelect 不支持 null value，因此用字符串 "__root__" 在 UI 层表示根目录，
+   * 提交时再翻译成 null。
+   */
+  const moveFolderOptions = computed(() => {
+    const file = files.value.find((f) => f.id === moveState.targetId)
+    const kbId = file?.kb_id
+    if (!kbId) return []
+    const opts = folders.value
+      .filter((fd) => fd.kb_id === kbId)
+      .map((fd) => ({ label: fd.name, value: fd.id }))
+    return [{ label: '（知识库根目录）', value: '__root__' }, ...opts]
+  })
+
+  function openMoveFile(file: KnowledgeFile) {
+    moveState.targetId = file.id
+    moveState.originalName = file.file_name
+    moveState.targetFolderId = file.folder_id
+    moveState.visible = true
+  }
+
+  function closeMoveDialog() {
+    moveState.visible = false
+    moveState.targetId = null
+    moveState.originalName = ''
+    moveState.targetFolderId = null
+    moveState.submitting = false
+  }
+
+  async function submitMoveFile() {
+    const fileId = moveState.targetId
+    if (!fileId) return
+    const file = files.value.find((f) => f.id === fileId)
+    if (!file) return
+    // 未改变目录：静默关闭
+    if ((file.folder_id ?? null) === (moveState.targetFolderId ?? null)) {
+      closeMoveDialog()
+      return
+    }
+    moveState.submitting = true
+    try {
+      await knowledgeApi.moveFile(fileId, moveState.targetFolderId)
+      await refreshFiles()
+      message.success('文件已移动')
+      closeMoveDialog()
+    } catch {
+      // 错误提示由 request 拦截器统一处理
+    } finally {
+      moveState.submitting = false
+    }
+  }
+
   /* ---------------------------------- 文件操作 ---------------------------------- */
 
   /** 表格行 NPopconfirm 已做确认；此处直接执行即可 */
@@ -485,6 +557,8 @@ export function createKnowledgeWorkspace() {
     uploadFileList,
     confirmState,
     renameState,
+    moveState,
+    moveFolderOptions,
     preview,
     selectedkb_id,
     selectedfolder_id,
@@ -499,6 +573,9 @@ export function createKnowledgeWorkspace() {
     openRenameFile,
     submitRename,
     closeRenameDialog,
+    openMoveFile,
+    closeMoveDialog,
+    submitMoveFile,
     deleteFolderNow,
     deleteFileNow,
     onTreeSelect,

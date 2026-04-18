@@ -103,6 +103,7 @@ class KnowledgeFolderDeleteSchema(BaseModel):
 
 # 更新文件
 class KnowledgeFileUpdateSchema(BaseModel):
+    id: str = Field(..., description="文件ID")
     file_name: Optional[str] = Field(
         default=None, min_length=1, max_length=255, description="新文件名"
     )

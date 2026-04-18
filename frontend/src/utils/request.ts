@@ -24,7 +24,7 @@ instance.interceptors.request.use(
 
 instance.interceptors.response.use(
   (response) => response.data,
-  (error) => {
+  async (error) => {
     if (error.response?.status === 401 && !handling401) {
       handling401 = true
       message.error('登录已过期，请重新登录')
@@ -36,7 +36,19 @@ instance.interceptors.response.use(
         })
     }
     if (error.response?.status !== 200) {
-      message.error(error.response?.data.message)
+      const data = error.response?.data
+      // responseType: 'blob' 的请求失败时，error.response.data 是 Blob，需要反序列化后再取 message
+      if (data instanceof Blob) {
+        try {
+          const text = await data.text()
+          const parsed = JSON.parse(text)
+          message.error(parsed?.message || parsed?.detail || '请求失败')
+        } catch {
+          message.error('请求失败')
+        }
+      } else {
+        message.error(data?.message)
+      }
     }
     return Promise.reject(error)
   },
