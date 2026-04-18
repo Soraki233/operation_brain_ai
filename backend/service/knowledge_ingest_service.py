@@ -321,6 +321,9 @@ class KnowledgeIngestService:
 
         return chunks or [doc]
 
+    # 被识别为"时间维度"列的列名关键词（用于 semantic_text 前置时间上下文）
+    _DATE_COL_KEYWORDS = ("日期", "时间", "date", "time", "年月", "月份", "年份")
+
     @staticmethod
     def _dataframe_to_row_documents(
         df: pd.DataFrame,
@@ -331,27 +334,67 @@ class KnowledgeIngestService:
         """把 DataFrame 转成行级 Document 列表。
 
         每一行数据独立成一个 Document：
-        - page_content = semantic_text（自然语言描述，适合向量检索）
+        - page_content = semantic_text（语义自然语言，适合向量检索）
         - metadata.row_data = {col: val_str, ...}（原始键值对，不丢字段）
 
-        semantic_text 格式：
-            工作表「{sheet_name}」第{row_idx+1}行：{col1}为{val1}，{col2}为{val2}，…
+        semantic_text 格式（示例）：
+            2024年1月1日 08:00，工作表「电量」：博总线正向有功总功率为 8608.70 kW，
+            博总线反向有功总功率为 0 kW（第1行）
 
-        列名含括号单位（如 "功率(kW)"）时自动拆分，写成：
-            功率为 1500 kW
+        优化点：
+        1. 日期列值转成中文年月日（"2026-02-01" → "2026年2月1日"）
+        2. 时间维度列（日期/时间）前置作为语义上下文
+        3. 列名含括号单位（如 "功率(kW)"）自动拆开写成 "功率为 1500 kW"
+        4. 列名中无意义的多级连字符前缀尽量缩短（"博总线-正向有功总" 中保留完整语义）
         """
         if df is None or df.empty:
             return []
 
         import re as _re
+        from datetime import datetime as _datetime
 
         df = df.copy()
 
-        # 日期列格式化（保留原始类型不触碰数值，仅对 datetime 列做字符串转换）
-        dt_formats: dict[str, str] = {}
+        # ── 日期列检测与格式化 ───────────────────────────────────────────────
+        # 两种情况都要处理：
+        # 1. pandas 已识别为 datetime64 类型（openpyxl 正常解析时）
+        # 2. Excel 存储为数字格式（序列号），pandas 读成 int64/float64，
+        #    需要用 origin='1899-12-30' + unit='D' 换算回真实日期。
+        #
+        # Excel 序列号判定规则：
+        #   - 列值全为整数（或整数值的 float）
+        #   - 数值范围在 25569~73051（对应 1970-01-01 ~ 2099-12-31）
+        #     实际业务数据通常在 40000~55000（2009~2050），放宽到 30000~70000
+        #   - 列名包含日期关键词，或整列 ≥90% 落在上述范围内
+        _EXCEL_DATE_LO, _EXCEL_DATE_HI = 25000, 70000  # ~1968–2091
+
+        def _looks_like_excel_serial(s: pd.Series) -> bool:
+            """判断某列是否像 Excel 日期序列号。"""
+            s_clean = s.dropna()
+            if len(s_clean) == 0:
+                return False
+            # 必须是数值
+            if not (
+                pd.api.types.is_integer_dtype(s_clean)
+                or pd.api.types.is_float_dtype(s_clean)
+            ):
+                return False
+            # float 列必须全是整数值（没有小数部分）
+            if pd.api.types.is_float_dtype(s_clean):
+                if not (s_clean == s_clean.round()).all():
+                    return False
+            vals = s_clean.astype(float)
+            in_range = ((vals >= _EXCEL_DATE_LO) & (vals <= _EXCEL_DATE_HI)).mean()
+            return bool(in_range >= 0.9)  # ≥90% 的值在合理日期范围内
+
+        col_is_date_only: dict[str, bool] = {}   # col_name -> True=仅日期 False=带时间
+        _date_kws_lower = [kw.lower() for kw in KnowledgeIngestService._DATE_COL_KEYWORDS]
+
         for col in df.columns:
             s = df[col]
+            col_lower = str(col).strip().lower()
             if pd.api.types.is_datetime64_any_dtype(s):
+                # 情况 1：pandas 已正确识别 datetime 列
                 dt = pd.to_datetime(s, errors="coerce")
                 has_time = bool(
                     (
@@ -362,21 +405,53 @@ class KnowledgeIngestService:
                 )
                 fmt = "%Y-%m-%d %H:%M:%S" if has_time else "%Y-%m-%d"
                 df[col] = dt.dt.strftime(fmt)
-                dt_formats[str(col)] = fmt
+                col_is_date_only[str(col)] = not has_time
+            elif _looks_like_excel_serial(s) and any(
+                kw in col_lower for kw in _date_kws_lower
+            ):
+                # 情况 2：列名含日期关键词 且 列值像 Excel 序列号 → 强制转换
+                # Excel 的起始纪元是 1899-12-30（因为 Excel 错误地把 1900-02-29 算进去了）
+                try:
+                    dt = pd.to_datetime(
+                        pd.to_numeric(s, errors="coerce"),
+                        unit="D",
+                        origin="1899-12-30",
+                        errors="coerce",
+                    )
+                    has_time = bool(
+                        (
+                            (dt.dt.hour.fillna(0) != 0)
+                            | (dt.dt.minute.fillna(0) != 0)
+                            | (dt.dt.second.fillna(0) != 0)
+                        ).any()
+                    )
+                    fmt = "%Y-%m-%d %H:%M:%S" if has_time else "%Y-%m-%d"
+                    df[col] = dt.dt.strftime(fmt)
+                    col_is_date_only[str(col)] = not has_time
+                    logger.info(
+                        "[EXCEL] 列 '%s' 识别为 Excel 日期序列号，已转换为日期字符串", col
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "[EXCEL] 列 '%s' 序列号转日期失败 err=%s，保留原始值", col, e
+                    )
 
         cols = [str(c).strip() for c in df.columns]
 
-        # 预处理：从列名里拆出单位 "功率(kW)" → col_label="功率", unit="kW"
-        # 兼容全角括号 （） 和半角 ()
-        _UNIT_PATTERN = _re.compile(r"^(.+?)[（(]([^）)]+)[）)]$")
-        col_meta: list[tuple[str, str, str]] = []  # (raw_col, label, unit)
-        for col in cols:
-            m = _UNIT_PATTERN.match(col)
-            if m:
-                col_meta.append((col, m.group(1).strip(), m.group(2).strip()))
-            else:
-                col_meta.append((col, col, ""))
+        # ── 列名预处理：拆单位 & 标记时间维度列 ──────────────────────────────
+        # col_meta: (raw_col, label, unit, is_time_dim)
+        _UNIT_PAT = _re.compile(r"^(.+?)[（(]([^）)]+)[）)]$")
+        _date_kws = KnowledgeIngestService._DATE_COL_KEYWORDS
 
+        col_meta: list[tuple[str, str, str, bool]] = []
+        for col in cols:
+            m = _UNIT_PAT.match(col)
+            label = m.group(1).strip() if m else col
+            unit  = m.group(2).strip() if m else ""
+            is_time = any(kw.lower() in col.lower() for kw in _date_kws)
+            col_meta.append((col, label, unit, is_time))
+
+        # ── 值格式化辅助 ─────────────────────────────────────────────────────
         def _fmt_val(val: object) -> str:
             if val is None:
                 return ""
@@ -386,33 +461,78 @@ class KnowledgeIngestService:
                 if val == int(val):
                     return str(int(val))
                 return ("%.6f" % val).rstrip("0").rstrip(".")
-            s = str(val).strip()
-            return s
+            return str(val).strip()
 
+        def _to_chinese_date(val_str: str) -> str:
+            """把 "2026-02-01" 或 "2026-02-01 08:00:00" 转成中文年月日。"""
+            s = val_str.strip()
+            # 尝试日期+时间
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+                try:
+                    dt = _datetime.strptime(s, fmt)
+                    if fmt == "%Y-%m-%d":
+                        return f"{dt.year}年{dt.month}月{dt.day}日"
+                    # 带时间：如果时间非零保留
+                    if dt.hour or dt.minute:
+                        return (
+                            f"{dt.year}年{dt.month}月{dt.day}日"
+                            f" {dt.hour:02d}:{dt.minute:02d}"
+                        )
+                    return f"{dt.year}年{dt.month}月{dt.day}日"
+                except ValueError:
+                    continue
+            return val_str  # 无法解析则原样返回
+
+        # ── 逐行生成 Document ────────────────────────────────────────────────
         docs: List[Document] = []
         for row_idx, row in enumerate(df.itertuples(index=False, name=None)):
             row_data: dict[str, str] = {}
-            fragments: list[str] = []
+            time_parts: list[str] = []    # 时间维度值，拼成前缀
+            measure_parts: list[str] = [] # 数值/描述字段，拼成主体
 
-            for (raw_col, label, unit), val in zip(col_meta, row):
+            for (raw_col, label, unit, is_time), val in zip(col_meta, row):
                 if not raw_col:
                     continue
                 val_str = _fmt_val(val)
                 if not val_str:
                     continue
                 row_data[raw_col] = val_str
-                if unit:
-                    fragments.append(f"{label}为 {val_str} {unit}")
-                else:
-                    fragments.append(f"{label}为 {val_str}")
 
-            if not fragments:
+                if is_time:
+                    # 时间维度列：转成中文日期，直接拼前缀（不写 "XXX为"）
+                    cn_val = _to_chinese_date(val_str)
+                    time_parts.append(cn_val)
+                else:
+                    # 数值 / 描述列：写成 "字段为 值 单位"
+                    if unit:
+                        measure_parts.append(f"{label}为 {val_str} {unit}")
+                    else:
+                        measure_parts.append(f"{label}为 {val_str}")
+
+            if not row_data:
                 continue
 
-            semantic_text = (
-                f"工作表「{sheet_name}」第{row_idx + 1}行："
-                + "，".join(fragments)
-            )
+            # 组装 semantic_text
+            # 格式："{时间上下文}，工作表「X」：{字段描述}（第N行）"
+            # 若无时间列，退化为：工作表「X」第N行：{字段描述}
+            if time_parts and measure_parts:
+                time_ctx = " ".join(time_parts)
+                semantic_text = (
+                    f"{time_ctx}，工作表「{sheet_name}」："
+                    + "，".join(measure_parts)
+                    + f"（第{row_idx + 1}行）"
+                )
+            elif time_parts:
+                # 全部字段都是时间维度、没有数值列：只记录时间上下文
+                time_ctx = " ".join(time_parts)
+                semantic_text = (
+                    f"{time_ctx}，工作表「{sheet_name}」（第{row_idx + 1}行）"
+                )
+            else:
+                semantic_text = (
+                    f"工作表「{sheet_name}」第{row_idx + 1}行："
+                    + "，".join(measure_parts)
+                )
 
             docs.append(
                 Document(
