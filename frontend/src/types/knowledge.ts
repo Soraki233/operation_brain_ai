@@ -29,6 +29,11 @@ export interface KnowledgeFolderUpdateSchema {
   name: string
 }
 
+export interface KnowledgeFolderDeleteSchema {
+  kb_id: Knowledgekb_id
+  folder_id: string
+}
+
 export interface KnowledgeFolderCreateSchema {
   kb_id: Knowledgekb_id
   name: string

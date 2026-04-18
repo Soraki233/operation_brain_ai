@@ -15,7 +15,8 @@ from schema.knowledge_schema import KnowledgeFolderResponseSchema
 from schema.knowledge_schema import KnowledgeFolderUpdateSchema
 from schema.knowledge_schema import KnowledgeFileCreateResponseSchema
 from schema.knowledge_schema import KnowledgeFileItemSchema
-from schema.knowledge_schema import PagedResponseSchema
+from schema.response import PagedResponseSchema
+from schema.knowledge_schema import KnowledgeFolderDeleteSchema
 
 knowledge_router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 
@@ -69,7 +70,7 @@ async def create_knowledge_folder(
 ):
     knowledge_folder = await KnowledgeRepo.create_knowledge_folder(
         knowledge_folder_create,
-        current_user.id,
+        current_user,
         db,
     )
     if not knowledge_folder:
@@ -87,7 +88,7 @@ async def update_knowledge_folder(
     db: AsyncSession = Depends(get_db),
 ):
     knowledge_folder = await KnowledgeRepo.update_knowledge_folder(
-        knowledge_folder_update, current_user.id, db
+        knowledge_folder_update, current_user, db
     )
     if not knowledge_folder:
         return error_response("更新知识库文件夹失败", 400)
@@ -95,6 +96,20 @@ async def update_knowledge_folder(
         data=KnowledgeFolderResponseSchema.model_validate(knowledge_folder)
     )
 
+
+# 删除知识库文件夹
+@knowledge_router.delete("/folder/delete", summary="删除知识库文件夹")
+async def delete_knowledge_folder(
+    knowledge_folder_delete: KnowledgeFolderDeleteSchema,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    knowledge_folder = await KnowledgeRepo.delete_knowledge_folder(knowledge_folder_delete, current_user, db)
+    if not knowledge_folder:
+        return error_response("删除知识库文件夹失败", 400)
+    return success_response(
+        data=KnowledgeFolderResponseSchema.model_validate(knowledge_folder)
+    )
 
 # 获取知识库文件列表（分页）
 @knowledge_router.get("/files/list", summary="获取知识库文件列表（分页）")
@@ -156,3 +171,4 @@ async def create_knowledge_file(
             for item in knowledge_files
         ]
     )
+

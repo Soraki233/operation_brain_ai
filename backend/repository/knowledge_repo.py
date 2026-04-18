@@ -7,13 +7,16 @@ from schema.knowledge_schema import (
     KnowledgeFolderUpdateSchema,
 )
 from sqlalchemy import select, func
-from core.reponse import error_response
 from db.models import KnowledgeFile as KnowledgeFileModel
-from fastapi import UploadFile
+from fastapi import UploadFile, Depends, HTTPException
 from core.settings import settings
 import asyncio
 from uuid import uuid4
 from pathlib import Path
+from schema.knowledge_schema import KnowledgeFolderDeleteSchema
+from db.models.user import User
+from core.deps import get_current_user, get_db
+from db.models.user import UserRole as UserRoleModel
 
 
 class KnowledgeRepo:
@@ -105,13 +108,19 @@ class KnowledgeRepo:
     @staticmethod
     async def create_knowledge_folder(
         knowledge_folder_data: KnowledgeFolderCreateSchema,
-        creator_user_id: str,
+        do_create_user: User,
         db: AsyncSession,
     ) -> KnowledgeFolderModel:
+        has_knowledge_permission = await get_has_knowledge_permission(
+            knowledge_folder_data.kb_id, do_create_user, db
+        )
+        if not has_knowledge_permission:
+            raise HTTPException(status_code=400, detail="您没有该权限")
+            
         knowledge_folder = KnowledgeFolderModel(
             kb_id=knowledge_folder_data.kb_id,
             name=knowledge_folder_data.name,
-            creator_user_id=creator_user_id,
+            creator_user_id=do_create_user.id,
         )
         db.add(knowledge_folder)
         await db.commit()
@@ -121,9 +130,10 @@ class KnowledgeRepo:
     @staticmethod
     async def update_knowledge_folder(
         knowledge_folder_data: KnowledgeFolderUpdateSchema,
-        creator_user_id: str,
+        do_update_user: User,
         db: AsyncSession,
     ) -> KnowledgeFolderModel:
+
         # 根据文件夹ID查询活跃且未删除的文件夹
         knowledge_folder = await db.execute(
             select(KnowledgeFolderModel).where(
@@ -132,18 +142,74 @@ class KnowledgeRepo:
                 KnowledgeFolderModel.is_deleted == 0,
             )
         )
-        # 获取查询结果
+        knowledge_folder = knowledge_folder.scalar_one_or_none()
+
+        # 先校验文件夹存在，再校验权限，避免对 None 取 kb_id
+        if not knowledge_folder:
+            raise HTTPException(status_code=400, detail="文件夹不存在")
+
+        has_knowledge_permission = await get_has_knowledge_permission(
+            knowledge_folder.kb_id, do_update_user, db
+        )
+        if not has_knowledge_permission:
+            raise HTTPException(status_code=400, detail="您没有该权限")
+
+        knowledge_folder.name = knowledge_folder_data.name
+        await db.commit()
+        await db.refresh(knowledge_folder)
+        return knowledge_folder
+
+    # 删除知识库文件夹
+    # 查询文件夹下所有文件，并删除文件，再删除文件夹
+    @staticmethod
+    async def delete_knowledge_folder(
+        KnowledgeFolderDeleteSchema: KnowledgeFolderDeleteSchema,
+        do_delete_user: User,
+        db: AsyncSession,
+    ) -> KnowledgeFolderModel:
+        """
+        删除知识库文件夹及其下所有文件（软删除）。
+        步骤如下：
+        1. 查询目标文件夹下的所有未被删除的文件。
+        2. 遍历这些文件，将其 is_deleted 字段更新为1（软删除），并提交数据库。
+        3. 查询目标文件夹，确认其存在且为活跃未删除状态。
+        4. 将该文件夹的 is_deleted 字段更新为1（软删除），并提交数据库。
+        5. 返回被删除的文件夹对象。
+        如果找不到对应的文件夹，则返回错误响应。
+        6.如果文件夹是共享知识库的，那么判断只能在该用户的role_key为admin时才能删除
+        """
+        has_knowledge_permission = await get_has_knowledge_permission(
+            KnowledgeFolderDeleteSchema.kb_id, do_delete_user, db
+        )
+        if not has_knowledge_permission:
+            raise HTTPException(status_code=400, detail="您没有该权限")
+        # 查询该文件夹下所有活跃且未被删除的文件
+        knowledge_files = await db.execute(
+            select(KnowledgeFileModel).where(
+                KnowledgeFileModel.folder_id == KnowledgeFolderDeleteSchema.folder_id,
+                KnowledgeFileModel.is_deleted == 0,
+            )
+        )
+        knowledge_files = knowledge_files.scalars().all()
+        # 遍历并软删除文件
+        for knowledge_file in knowledge_files:
+            knowledge_file.is_deleted = 1  # 软删除文件
+            await db.commit()
+            await db.refresh(knowledge_file)
+        # 查询活跃且未被删除的文件夹
+        knowledge_folder = await db.execute(
+            select(KnowledgeFolderModel).where(
+                KnowledgeFolderModel.id == KnowledgeFolderDeleteSchema.folder_id,
+                KnowledgeFolderModel.is_active == 1,
+                KnowledgeFolderModel.is_deleted == 0,
+            )
+        )
         knowledge_folder = knowledge_folder.scalar_one_or_none()
         if not knowledge_folder:
-            # 如果未找到对应文件夹，则返回None
-            return error_response("文件夹不存在", 400)
-        # 更新文件夹名称
-        knowledge_folder.name = knowledge_folder_data.name
-        # 提交更新到数据库
+            raise HTTPException(status_code=400, detail="文件夹不存在")
+        knowledge_folder.is_deleted = 1  # 软删除文件夹
         await db.commit()
-        # 刷新实例以获取最新数据
         await db.refresh(knowledge_folder)
-        # 返回更新后的文件夹对象
         return knowledge_folder
 
     @staticmethod
@@ -212,7 +278,10 @@ class KnowledgeRepo:
         # 生成文件保存路径
         save_path = save_dir / physical_name
         # 写入文件内容
-        await asyncio.to_thread(save_path.write_bytes, content,)
+        await asyncio.to_thread(
+            save_path.write_bytes,
+            content,
+        )
         # 创建知识库文件对象
         file = KnowledgeFileModel(
             kb_id=kb_id,
@@ -231,3 +300,32 @@ class KnowledgeRepo:
         await db.commit()
         await db.refresh(file)
         return file
+
+
+async def get_has_knowledge_permission(
+    kb_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> bool:
+    # 查询知识库
+    knowledge_base = await db.execute(
+        select(KnowledgeBaseModel).where(
+            KnowledgeBaseModel.id == kb_id,
+            KnowledgeBaseModel.is_active == 1,
+            KnowledgeBaseModel.is_deleted == 0,
+        )
+    )
+    knowledge_base = knowledge_base.scalar_one_or_none()
+    # 查询该用户的role_key
+    user_role = await db.execute(
+        select(UserRoleModel).where(
+            UserRoleModel.id == current_user.role_id,
+        )
+    )
+    user_role = user_role.scalar_one_or_none()
+    if knowledge_base.scope == "shared":
+        if user_role.role_key != "admin":
+            return False
+    if knowledge_base.creator_user_id != current_user.id:
+        return False
+    return True

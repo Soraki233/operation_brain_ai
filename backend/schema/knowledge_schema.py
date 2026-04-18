@@ -89,7 +89,16 @@ class KnowledgeFolderUpdateSchema(BaseModel):
 
 # 删除文件夹
 class KnowledgeFolderDeleteSchema(BaseModel):
+    kb_id: str = Field(..., description="知识库ID")
     folder_id: str = Field(..., description="文件夹ID")
+
+    @model_validator(mode="after")
+    def validate_request(self):
+        if not self.kb_id:
+            raise ValueError("知识库ID不能为空")
+        if not self.folder_id:
+            raise ValueError("文件夹ID不能为空")
+        return self
 
 
 # 更新文件
@@ -133,12 +142,6 @@ class KnowledgeFileCreateResponseSchema(BaseModel):
     error_message: Optional[str] = Field(default=None, description="失败原因")
 
 
-# 分页响应体（通用）
-class PagedResponseSchema(BaseModel, Generic[T]):
-    total: int = Field(..., description="总记录数")
-    page: int = Field(..., description="当前页码")
-    page_size: int = Field(..., description="每页条数")
-    items: List[T] = Field(..., description="数据列表")
 
 
 # 查询文件列表请求体

@@ -238,7 +238,7 @@ export function createKnowledgeWorkspace() {
       createFolderVisible.value = false
       await refreshFolders()
     } catch (e: unknown) {
-      message.error(e instanceof Error ? e.message : '创建失败')
+      // message.error(e instanceof Error ? e.message : '创建失败')
     } finally {
       createFolderSubmitting.value = false
     }
@@ -300,7 +300,7 @@ export function createKnowledgeWorkspace() {
       }
       closeRenameDialog()
     } catch (e: unknown) {
-      message.error(e instanceof Error ? e.message : '重命名失败')
+      // message.error(e instanceof Error ? e.message : '重命名失败')
     } finally {
       renameState.submitting = false
     }
@@ -309,7 +309,7 @@ export function createKnowledgeWorkspace() {
   /** 侧边栏行内 NPopconfirm 已做确认；此处直接执行即可 */
   async function deleteFolderNow(folder: KnowledgeFolder) {
     try {
-      await knowledgeApi.deleteFolder(folder.id)
+      await knowledgeApi.deleteFolder(folder.id, folder.kb_id)
       if (selectedTreeKey.value === `folder:${folder.id}`) {
         selectedTreeKey.value = `lib:${folder.kb_id}`
       }
@@ -317,7 +317,7 @@ export function createKnowledgeWorkspace() {
       await refreshFiles()
       message.success('文件夹已删除')
     } catch (e: unknown) {
-      message.error(e instanceof Error ? e.message : '删除失败')
+      // message.error(e instanceof Error ? e.message : '删除失败')
     }
   }
 

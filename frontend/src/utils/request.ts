@@ -35,6 +35,9 @@ instance.interceptors.response.use(
           handling401 = false
         })
     }
+    if (error.response?.status !== 200) {
+      message.error(error.response?.data.message)
+    }
     return Promise.reject(error)
   },
 )

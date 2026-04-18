@@ -35,6 +35,7 @@ import type {
   UploadPayload,
   KnowledgeFolderCreateSchema,
   KnowledgeFolderUpdateSchema,
+  KnowledgeFolderDeleteSchema,
 } from '@/types/knowledge'
 import request from '@/utils/request'
 
@@ -155,16 +156,11 @@ export async function renameFolder(
 }
 
 /** 删除文件夹（同时删除其中所有文件，真实后端按约定调整） */
-export async function deleteFolder(folder_id: string): Promise<void> {
-  // 真实实现: return request.delete(`/knowledge/folders/${folder_id}`)
-  await mockDelay(200)
-  if (!mockFolders.some((f) => f.id === folder_id)) {
-    throw new Error('文件夹不存在')
-  }
-  mockFolders = mockFolders.filter((f) => f.id !== folder_id)
-  const gone = mockFiles.filter((f) => f.folder_id === folder_id)
-  gone.forEach((f) => mockBlobStore.delete(f.id))
-  mockFiles = mockFiles.filter((f) => f.folder_id !== folder_id)
+export async function deleteFolder(folder_id: string, kb_id: Knowledgekb_id): Promise<KnowledgeFolder> {
+  // 使用body传递参数
+  const body: KnowledgeFolderDeleteSchema = { folder_id: folder_id, kb_id: kb_id }
+  const res = await request.delete<{ data: KnowledgeFolder }>('/knowledge/folder/delete', { data: body })
+  return res.data
 }
 
 /** 获取文件列表（支持搜索 + 分页） */

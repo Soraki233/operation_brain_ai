@@ -5,6 +5,8 @@ from sqlalchemy import select
 from db.session import AsyncSession, get_db
 from db.models.user import User
 from core.security import decode_access_token
+from db.models.knowledge import KnowledgeBase as KnowledgeBaseModel
+from db.models.user import UserRole as UserRoleModel
 
 bearer_scheme = HTTPBearer()
 
@@ -49,3 +51,5 @@ async def get_current_user(
         )
 
     return user
+
+
