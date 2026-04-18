@@ -104,6 +104,44 @@ class Settings(BaseSettings):
         "- 若所有片段都无关，【事实摘要】写'当前知识库片段与问题无关'"
     )
 
+    # 文档结构分析（切分前）
+    # 为 False 时退化为 RecursiveCharacterTextSplitter
+    STRUCTURE_ANALYZER_ENABLED: bool = True
+    # 单次 LLM 调用的输入长度上限，超过后自动按段落粗切多次分析
+    STRUCTURE_ANALYZER_MAX_INPUT_CHARS: int = 12000
+    # LLM 输出上限（JSON 模式下用于容纳结构化输出）
+    STRUCTURE_ANALYZER_MAX_TOKENS: int = 4096
+    STRUCTURE_ANALYZER_SYSTEM_PROMPT: str = (
+        "你是一个知识库文档结构分析助手。\n"
+        "你的任务是分析输入的文档内容，并识别其结构边界，以便后续进行高质量切割。\n\n"
+        "【识别目标】\n"
+        "请识别以下结构：\n"
+        "1. 文档标题\n"
+        "2. 一级章节\n"
+        "3. 二级章节\n"
+        "4. 条款编号\n"
+        "5. 步骤列表\n"
+        "6. 注意事项 / 警告 / 禁止项\n"
+        "7. 表格内容\n"
+        "8. 普通说明段落\n\n"
+        "【输出要求】\n"
+        "请**严格**以 JSON 对象格式输出，结构如下：\n"
+        '{"units": [\n'
+        '  {"type": "<结构类型>", "title": "<标题或条款名>", '
+        '"content": "<正文内容>", "level": <层级 0-5>, '
+        '"keywords": ["<关键词1>", "<关键词2>"]}\n'
+        "]}\n\n"
+        "type 取值建议：doc_title / heading_1 / heading_2 / heading_3 / "
+        "clause / steps / notice / warning / forbidden / table / paragraph\n\n"
+        "【约束】\n"
+        "1. 不要按固定长度切割\n"
+        "2. 优先保持语义完整：条件、操作、结果尽量保留在同一结构单元中\n"
+        "3. 步骤列表不要拆散\n"
+        "4. 表格单独标记为 table，content 保留原始表格文本\n"
+        "5. 只输出 JSON，不要输出 Markdown 代码块包装、不要任何解释性文字\n"
+        "6. 无标题的段落 title 字段可写为空字符串 '' 或简短摘要"
+    )
+
     # 线程历史压缩
     THREAD_SUMMARY_TRIGGER_MSG_COUNT: int = 20
     THREAD_SUMMARY_TRIGGER_TOKEN_EST: int = 6000

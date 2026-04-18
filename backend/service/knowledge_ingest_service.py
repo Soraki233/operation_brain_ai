@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import re
 import zipfile
@@ -17,12 +18,20 @@ import docx2txt
 from langchain_community.document_loaders import PyPDFLoader
 
 from service.vector_store_service import VectorStoreService
+from service.structure_analyzer import StructureAnalyzer, StructureAnalyzeError
 from core.settings import settings
 
 
 class KnowledgeIngestService:
     def __init__(self) -> None:
         self.vector_store = VectorStoreService().get_store()
+        # 懒加载：仅在真正需要结构化切分时才初始化 LLM 连接
+        self._structure_analyzer: StructureAnalyzer | None = None
+
+    def _get_structure_analyzer(self) -> StructureAnalyzer:
+        if self._structure_analyzer is None:
+            self._structure_analyzer = StructureAnalyzer()
+        return self._structure_analyzer
 
     def load_file(self, file_path: str) -> List[Document]:
         path = Path(file_path)
@@ -47,15 +56,10 @@ class KnowledgeIngestService:
                 df = self._clean_excel_dataframe(df)
                 if df.empty:
                     continue
-                text = self._dataframe_to_records_text(df, sheet_name=sheet_name)
-                if not text.strip():
-                    continue
-                docs.append(
-                    Document(
-                        page_content=text,
-                        metadata={"source": str(path), "sheet": sheet_name},
-                    )
+                row_docs = self._dataframe_to_row_documents(
+                    df, sheet_name=sheet_name, source=str(path)
                 )
+                docs.extend(row_docs)
         elif suffix in {".md", ".txt"}:
             text = path.read_text(encoding="utf-8", errors="ignore")
             docs = [Document(page_content=text, metadata={"source": str(path)})]
@@ -108,25 +112,145 @@ class KnowledgeIngestService:
             metadata = dict(doc.metadata or {})
             metadata.update({"kb_id": kb_id, "file_id": file_id})
             normalized = Document(page_content=doc.page_content, metadata=metadata)
-            # Excel sheet 的内容是 CSV 文本，必须按行切并保留表头，
-            # 否则单行被切到一半 / 后续 chunk 没表头，召回的片段模型完全读不懂。
-            if metadata.get("sheet"):
-                chunks.extend(
-                    self._split_csv_document(
-                        normalized,
-                        max_chars=settings.KNOWLEDGE_CHUNK_SIZE,
-                    )
-                )
+            # row_level=True 的 Document 是由 _dataframe_to_row_documents
+            # 生成的行级 chunk，已经是最小单元，直接追加，不再二次切分。
+            if metadata.get("row_level"):
+                chunks.append(normalized)
             else:
                 non_excel_docs.append(normalized)
 
         if non_excel_docs:
-            chunks.extend(splitter.split_documents(non_excel_docs))
+            chunks.extend(
+                self._split_non_excel_documents(non_excel_docs, splitter=splitter)
+            )
 
         for idx, chunk in enumerate(chunks):
             chunk.metadata["chunk_index"] = idx
 
         return chunks
+
+    # 结构化单元超过 chunk_size 的多少倍时触发二次切分
+    _STRUCTURE_OVERSIZE_FACTOR: float = 1.5
+    # 单文档整体结构分析的硬超时（秒）。超过直接 fallback 到 Recursive 切分，
+    # 避免 LLM 异常（挂起 / 反复重试）把后台 ingest 线程卡住导致文件永远
+    # 停在 "processing" 状态。
+    _STRUCTURE_ANALYZE_HARD_TIMEOUT: int = 300
+
+    def _split_non_excel_documents(
+        self,
+        docs: List[Document],
+        *,
+        splitter: RecursiveCharacterTextSplitter,
+    ) -> List[Document]:
+        """PDF/Word/TXT/MD 走 LLM 结构感知切分；失败或关闭时退化为
+        RecursiveCharacterTextSplitter。
+        """
+        if not docs:
+            return []
+
+        if not settings.STRUCTURE_ANALYZER_ENABLED:
+            return splitter.split_documents(docs)
+
+        try:
+            analyzer = self._get_structure_analyzer()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "[STRUCTURE] 初始化失败，退化为 Recursive 切分 err=%s", e
+            )
+            return splitter.split_documents(docs)
+
+        oversize_limit = int(
+            settings.KNOWLEDGE_CHUNK_SIZE * self._STRUCTURE_OVERSIZE_FACTOR
+        )
+        result: List[Document] = []
+
+        for i, doc in enumerate(docs, start=1):
+            text = (doc.page_content or "").strip()
+            if not text:
+                continue
+            logger.info(
+                "[STRUCTURE] 开始分析文档 %d/%d | source=%s 文本=%dchar hard_timeout=%ds",
+                i,
+                len(docs),
+                doc.metadata.get("source"),
+                len(text),
+                self._STRUCTURE_ANALYZE_HARD_TIMEOUT,
+            )
+            try:
+                # 整篇文档分析放到独立线程，套一个硬超时，
+                # 防止 LLM 异常挂起把 ingest 线程永远阻塞。
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(analyzer.analyze, text)
+                    units = future.result(
+                        timeout=self._STRUCTURE_ANALYZE_HARD_TIMEOUT
+                    )
+            except concurrent.futures.TimeoutError:
+                logger.warning(
+                    "[STRUCTURE] 分析超时(%ds)，回退 Recursive 切分 source=%s",
+                    self._STRUCTURE_ANALYZE_HARD_TIMEOUT,
+                    doc.metadata.get("source"),
+                )
+                result.extend(splitter.split_documents([doc]))
+                continue
+            except StructureAnalyzeError as e:
+                logger.warning(
+                    "[STRUCTURE] 分析失败，回退 Recursive 切分 source=%s err=%s",
+                    doc.metadata.get("source"),
+                    e,
+                )
+                result.extend(splitter.split_documents([doc]))
+                continue
+            except Exception as e:  # noqa: BLE001
+                logger.exception(
+                    "[STRUCTURE] 未预期异常，回退 Recursive 切分 err=%s", e
+                )
+                result.extend(splitter.split_documents([doc]))
+                continue
+            logger.info(
+                "[STRUCTURE] 文档 %d/%d 分析完成 | 得到结构单元=%d",
+                i,
+                len(docs),
+                len(units),
+            )
+
+            for unit in units:
+                title = unit.title or ""
+                u_type = unit.type or "paragraph"
+                prefix = (
+                    f"【{u_type} · {title}】" if title else f"【{u_type}】"
+                )
+                page_content = f"{prefix}\n{unit.content}".strip()
+
+                base_meta = dict(doc.metadata or {})
+                base_meta.update(
+                    {
+                        "structure_type": u_type,
+                        "structure_title": title,
+                        "structure_level": int(unit.level or 0),
+                        "keywords": list(unit.keywords or []),
+                    }
+                )
+
+                # 单个结构单元过大 → 用 Recursive 二次切，metadata 保留结构信息
+                if len(page_content) > oversize_limit:
+                    sub_docs = splitter.split_documents(
+                        [Document(page_content=page_content, metadata=base_meta)]
+                    )
+                    for sub in sub_docs:
+                        merged_meta = dict(base_meta)
+                        merged_meta.update(sub.metadata or {})
+                        result.append(
+                            Document(
+                                page_content=sub.page_content,
+                                metadata=merged_meta,
+                            )
+                        )
+                else:
+                    result.append(
+                        Document(page_content=page_content, metadata=base_meta)
+                    )
+
+        return result
 
     # 被视为表头的前缀：遇到以这些前缀开头的行，都会被视为需要复用到每个 chunk 的"表头"。
     _HEADER_LINE_PREFIXES = ("工作表：", "字段：")
@@ -196,6 +320,114 @@ class KnowledgeIngestService:
         flush(len(data_lines))
 
         return chunks or [doc]
+
+    @staticmethod
+    def _dataframe_to_row_documents(
+        df: pd.DataFrame,
+        *,
+        sheet_name: str,
+        source: str,
+    ) -> List[Document]:
+        """把 DataFrame 转成行级 Document 列表。
+
+        每一行数据独立成一个 Document：
+        - page_content = semantic_text（自然语言描述，适合向量检索）
+        - metadata.row_data = {col: val_str, ...}（原始键值对，不丢字段）
+
+        semantic_text 格式：
+            工作表「{sheet_name}」第{row_idx+1}行：{col1}为{val1}，{col2}为{val2}，…
+
+        列名含括号单位（如 "功率(kW)"）时自动拆分，写成：
+            功率为 1500 kW
+        """
+        if df is None or df.empty:
+            return []
+
+        import re as _re
+
+        df = df.copy()
+
+        # 日期列格式化（保留原始类型不触碰数值，仅对 datetime 列做字符串转换）
+        dt_formats: dict[str, str] = {}
+        for col in df.columns:
+            s = df[col]
+            if pd.api.types.is_datetime64_any_dtype(s):
+                dt = pd.to_datetime(s, errors="coerce")
+                has_time = bool(
+                    (
+                        (dt.dt.hour.fillna(0) != 0)
+                        | (dt.dt.minute.fillna(0) != 0)
+                        | (dt.dt.second.fillna(0) != 0)
+                    ).any()
+                )
+                fmt = "%Y-%m-%d %H:%M:%S" if has_time else "%Y-%m-%d"
+                df[col] = dt.dt.strftime(fmt)
+                dt_formats[str(col)] = fmt
+
+        cols = [str(c).strip() for c in df.columns]
+
+        # 预处理：从列名里拆出单位 "功率(kW)" → col_label="功率", unit="kW"
+        # 兼容全角括号 （） 和半角 ()
+        _UNIT_PATTERN = _re.compile(r"^(.+?)[（(]([^）)]+)[）)]$")
+        col_meta: list[tuple[str, str, str]] = []  # (raw_col, label, unit)
+        for col in cols:
+            m = _UNIT_PATTERN.match(col)
+            if m:
+                col_meta.append((col, m.group(1).strip(), m.group(2).strip()))
+            else:
+                col_meta.append((col, col, ""))
+
+        def _fmt_val(val: object) -> str:
+            if val is None:
+                return ""
+            if isinstance(val, float):
+                if pd.isna(val):
+                    return ""
+                if val == int(val):
+                    return str(int(val))
+                return ("%.6f" % val).rstrip("0").rstrip(".")
+            s = str(val).strip()
+            return s
+
+        docs: List[Document] = []
+        for row_idx, row in enumerate(df.itertuples(index=False, name=None)):
+            row_data: dict[str, str] = {}
+            fragments: list[str] = []
+
+            for (raw_col, label, unit), val in zip(col_meta, row):
+                if not raw_col:
+                    continue
+                val_str = _fmt_val(val)
+                if not val_str:
+                    continue
+                row_data[raw_col] = val_str
+                if unit:
+                    fragments.append(f"{label}为 {val_str} {unit}")
+                else:
+                    fragments.append(f"{label}为 {val_str}")
+
+            if not fragments:
+                continue
+
+            semantic_text = (
+                f"工作表「{sheet_name}」第{row_idx + 1}行："
+                + "，".join(fragments)
+            )
+
+            docs.append(
+                Document(
+                    page_content=semantic_text,
+                    metadata={
+                        "source": source,
+                        "sheet": sheet_name,
+                        "row_index": row_idx,
+                        "row_level": True,
+                        "row_data": row_data,
+                    },
+                )
+            )
+
+        return docs
 
     # DashScope text-embedding-v3/v4 单次请求最多 10 条文本，超过会直接 4xx。
     # 而 langchain_community.DashScopeEmbeddings.embed_documents 不会主动分批，

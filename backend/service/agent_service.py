@@ -148,24 +148,29 @@ class AgentService:
         # 同时记录命中的 (file_id, chunk_index) 用于后续去重标记
         citations: list[dict] = []
         hit_keys: set[tuple[str, int]] = set()
+        # 记录 (file_id, chunk_index) → structure_title，后续扩读上下文时复用
+        structure_title_map: dict[tuple[str, int], str] = {}
         for doc, score in hits:
             meta = doc.metadata or {}
             file_id = meta.get("file_id") or ""
             chunk_index = int(meta.get("chunk_index", 0))
             file_name = file_name_map.get(file_id, "（已删除）")
+            structure_title = str(meta.get("structure_title") or "").strip()
             content = (doc.page_content or "").strip()
             snippet = content[: self._SNIPPET_MAX_CHARS]
             if len(content) > self._SNIPPET_MAX_CHARS:
                 snippet += "…"
-            citations.append(
-                {
-                    "file_id": file_id,
-                    "file_name": file_name,
-                    "chunk_index": chunk_index,
-                    "score": float(score) if score is not None else 0.0,
-                    "snippet": snippet,
-                }
-            )
+            citation: dict = {
+                "file_id": file_id,
+                "file_name": file_name,
+                "chunk_index": chunk_index,
+                "score": float(score) if score is not None else 0.0,
+                "snippet": snippet,
+            }
+            if structure_title:
+                citation["structure_title"] = structure_title
+                structure_title_map[(file_id, chunk_index)] = structure_title
+            citations.append(citation)
             hit_keys.add((file_id, chunk_index))
 
         # ── 上下文扩读：取命中 chunk 的前后邻近 chunk ──────────────────────
@@ -187,19 +192,25 @@ class AgentService:
         context_skipped = 0
 
         # 按 file_id 分组
-        file_chunks: dict[str, list[tuple[int, str, bool]]] = defaultdict(list)
-        for file_id, chunk_index, content in expanded_chunks:
+        # chunk 元组：(chunk_index, content, is_hit, structure_title)
+        file_chunks: dict[str, list[tuple[int, str, bool, str]]] = defaultdict(list)
+        for file_id, chunk_index, content, structure_title in expanded_chunks:
             is_hit = (file_id, chunk_index) in hit_keys
-            file_chunks[file_id].append((chunk_index, content, is_hit))
+            # 优先使用扩读时从 DB 读到的 structure_title；没有则退回命中 chunk 的标题
+            title = structure_title or structure_title_map.get(
+                (file_id, chunk_index), ""
+            )
+            file_chunks[file_id].append((chunk_index, content, is_hit, title))
 
         context_blocks: list[str] = []
         for file_id, chunk_list in file_chunks.items():
             file_name = file_name_map.get(file_id, "（已删除）")
             # 已经由 _fetch_context_chunks 按 chunk_index 排好序
             lines: list[str] = [f"【文件：{file_name}】"]
-            for _, content, is_hit in chunk_list:
+            for _, content, is_hit, title in chunk_list:
                 marker = "★ " if is_hit else ""
-                block = f"{marker}{content}"
+                title_prefix = f"[章节：{title}] " if title else ""
+                block = f"{marker}{title_prefix}{content}"
                 if context_used_chars + len(block) + len(file_name) + 10 <= self._CONTEXT_TOTAL_MAX_CHARS:
                     lines.append(block)
                     context_used_chars += len(block)
@@ -226,21 +237,23 @@ class AgentService:
         *,
         window: int,
         db: AsyncSession,
-    ) -> list[tuple[str, int, str]]:
+    ) -> list[tuple[str, int, str, str]]:
         """根据命中 chunk 向前/后各扩 window 个相邻 chunk，从 DB 批量查询。
 
-        返回按 (file_id, chunk_index) 排序的列表：[(file_id, chunk_index, content), ...]
+        返回按 (file_id, chunk_index) 排序的列表：
+            [(file_id, chunk_index, content, structure_title), ...]
         已自动合并同一文件内重叠的窗口区间，结果去重。
         """
         if window <= 0:
             # 不扩展，直接返回命中 chunk 本身
-            result = []
+            result: list[tuple[str, int, str, str]] = []
             for doc, _ in hits:
                 meta = doc.metadata or {}
                 fid = meta.get("file_id") or ""
                 cidx = int(meta.get("chunk_index", 0))
                 content = (doc.page_content or "").strip()
-                result.append((fid, cidx, content))
+                title = str(meta.get("structure_title") or "").strip()
+                result.append((fid, cidx, content, title))
             return sorted(result, key=lambda x: (x[0], x[1]))
 
         # 按 file_id 分组，合并重叠区间
@@ -291,15 +304,17 @@ class AgentService:
         rows = (await db.execute(sql)).fetchall()
 
         seen: set[tuple[str, int]] = set()
-        result: list[tuple[str, int, str]] = []
+        result: list[tuple[str, int, str, str]] = []
         for document, cmetadata in rows:
-            fid = (cmetadata or {}).get("file_id") or ""
-            cidx = int((cmetadata or {}).get("chunk_index", 0))
+            meta = cmetadata or {}
+            fid = meta.get("file_id") or ""
+            cidx = int(meta.get("chunk_index", 0))
             key = (fid, cidx)
             if key in seen:
                 continue
             seen.add(key)
-            result.append((fid, cidx, (document or "").strip()))
+            title = str(meta.get("structure_title") or "").strip()
+            result.append((fid, cidx, (document or "").strip(), title))
 
         return result
 

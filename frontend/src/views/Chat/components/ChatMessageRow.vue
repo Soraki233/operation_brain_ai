@@ -195,6 +195,9 @@ const showStreamTimer = computed(
                   <NEllipsis class="citation-name">{{ c.file_name }}</NEllipsis>
                   <span class="citation-score">score {{ c.score.toFixed(2) }}</span>
                 </div>
+                <div v-if="c.structure_title" class="citation-section">
+                  <NEllipsis>章节：{{ c.structure_title }}</NEllipsis>
+                </div>
                 <div class="citation-snippet">{{ c.snippet }}</div>
               </li>
             </ul>
@@ -559,6 +562,13 @@ const showStreamTimer = computed(
   color: @text-placeholder;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+}
+
+.citation-section {
+  margin-top: 4px;
+  color: @primary-blue;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .citation-snippet {

@@ -21,6 +21,8 @@ export interface ChatCitation {
   chunk_index: number
   score: number
   snippet: string
+  /** 结构化切分命中的章节标题（LLM 结构分析后才会返回） */
+  structure_title?: string
 }
 
 export interface ChatSession {

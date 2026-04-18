@@ -14,6 +14,9 @@ class ChatCitationSchema(BaseModel):
     chunk_index: int = Field(..., description="命中 chunk 序号")
     score: float = Field(..., description="向量距离，越小越相似")
     snippet: str = Field(..., description="命中片段（已截断）")
+    structure_title: Optional[str] = Field(
+        default=None, description="结构化切分命中的章节标题（可选）"
+    )
 
 
 # 创建会话
