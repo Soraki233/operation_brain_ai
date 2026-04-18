@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import logging
+import re
+import zipfile
 from pathlib import Path
 from typing import List
+from xml.etree import ElementTree as ET
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import (
-    PyPDFLoader,
-    Docx2txtLoader,
-)
+import docx as _docx
+import docx2txt
+from langchain_community.document_loaders import PyPDFLoader
 
 from service.vector_store_service import VectorStoreService
 from core.settings import settings
@@ -25,8 +30,8 @@ class KnowledgeIngestService:
 
         if suffix == ".pdf":
             docs = PyPDFLoader(str(path)).load()
-        elif suffix == ".docx":
-            docs = Docx2txtLoader(str(path)).load()
+        elif suffix in {".docx", ".doc"}:
+            docs = self._load_word_doc(path)
         elif suffix in {".xlsx", ".xls"}:
             # 避开 UnstructuredExcelLoader（其 xlsx 分支依赖 networkx / unstructured 全家桶），
             # 直接用 pandas 按 sheet 读取。不用 CSV：对 LLM 来说 ",,,," 这种空列
@@ -93,7 +98,7 @@ class KnowledgeIngestService:
                 ",",
                 "\t",
                 "\r",
-                "\s",
+                " ",
             ],
         )
 
@@ -255,6 +260,104 @@ class KnowledgeIngestService:
             return
         ids = [f"{file_id}:{i}" for i in range(chunk_count)]
         self.vector_store.delete(ids=ids)
+
+    @staticmethod
+    def _load_word_doc(path: Path) -> List[Document]:
+        """加载 .docx 或 .doc 文件。
+        
+        尝试顺序：
+        1. python-docx（适合 .docx 及以 .doc 保存的 Open XML 文件）
+        2. docx2txt（更宽松的解析）
+        3. 提示用户转存为 .docx
+        """
+        text: str | None = None
+
+        # 尝试 1：python-docx（适用标准 Word / 部分 WPS）
+        try:
+            document = _docx.Document(str(path))
+            paragraphs = [p.text for p in document.paragraphs if p.text.strip()]
+            for table in document.tables:
+                for row in table.rows:
+                    cells = [c.text.strip() for c in row.cells if c.text.strip()]
+                    if cells:
+                        paragraphs.append(" | ".join(cells))
+            text = "\n".join(paragraphs)
+        except Exception as e:
+            logger.info("[WORD] python-docx 失败，尝试下一种方式 err=%s", e)
+
+        # 尝试 2：docx2txt
+        if not text:
+            try:
+                text = docx2txt.process(str(path))
+            except Exception as e:
+                logger.info("[WORD] docx2txt 失败，尝试下一种方式 err=%s", e)
+
+        # 尝试 3：直接当 ZIP 解压，从 XML 里提取文本
+        # 兼容 WPS 文字、金山 WPS、Office 365、以及各种 relationship 变体
+        if not text:
+            try:
+                text = KnowledgeIngestService._extract_text_from_ooxml_zip(path)
+            except Exception as e:
+                logger.info("[WORD] ZIP 直解方式失败 err=%s", e)
+
+        if not text or not text.strip():
+            suffix = path.suffix.lower()
+            logger.error("[WORD] 所有方式均无法提取文本 path=%s", path)
+            if suffix == ".doc":
+                raise ValueError(
+                    "旧版 .doc 文件无法解析，请在 Word 中另存为 .docx 格式后重新上传"
+                )
+            raise ValueError(
+                f"Word 文件解析失败，文件可能为加密或严重损坏: {path.name}"
+            )
+
+        return [Document(page_content=text.strip(), metadata={"source": str(path)})]
+
+    @staticmethod
+    def _extract_text_from_ooxml_zip(path: Path) -> str:
+        """直接把 .docx/.doc 当 ZIP 拆开，从任何包含 w:t 标签的 XML 里提取文本。
+        
+        可处理：
+        - WPS 文字生成的 .docx（relationship namespace 与 Word 不同）
+        - 含自定义关系的 Office 365 文件
+        - 任意 Open XML 变体
+        """
+        W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+        text_parts: list[str] = []
+
+        with zipfile.ZipFile(str(path), "r") as zf:
+            # 优先读 word/document.xml；其次找所有含 "document" 的 xml
+            xml_candidates = [
+                n for n in zf.namelist()
+                if n.endswith(".xml") and (
+                    "document" in n.lower() or
+                    "content" in n.lower() or
+                    n.startswith("word/")
+                )
+            ]
+            # 如果没有上述匹配，就读所有 xml
+            if not xml_candidates:
+                xml_candidates = [n for n in zf.namelist() if n.endswith(".xml")]
+
+            for xml_name in xml_candidates:
+                try:
+                    xml_bytes = zf.read(xml_name)
+                    root = ET.fromstring(xml_bytes)
+                    # 提取所有 w:t 文本节点
+                    for elem in root.iter(f"{{{W_NS}}}t"):
+                        if elem.text:
+                            text_parts.append(elem.text)
+                    # 段落分隔符
+                    for elem in root.iter(f"{{{W_NS}}}p"):
+                        text_parts.append("\n")
+                except Exception:
+                    continue
+
+        raw = "".join(text_parts)
+        # 合并多余换行
+        raw = re.sub(r"\n{3,}", "\n\n", raw).strip()
+        return raw
 
     @staticmethod
     def _read_excel_sheet_smart(

@@ -233,46 +233,70 @@ const columns: DataTableColumns<KnowledgeFile> = [
     key: 'actions',
     align: 'center',
     width: 200,
-    render: (row) =>
-      h('div', { class: 'row-actions', style: { justifyContent: 'center' } }, [
-        h(
-          'a',
-          {
-            class: 'link-btn link-btn--primary',
-            onClick: () => void workspace.openPreview(row),
-          },
-          '预览',
-        ),
-        h(
-          'a',
-          {
-            class: 'link-btn link-btn--primary',
-            onClick: () => workspace.openRenameFile(row),
-          },
-          '重命名',
-        ),
-        h(
-          'a',
-          {
-            class: 'link-btn link-btn--primary',
-            onClick: () => workspace.openMoveFile(row),
-          },
-          '移动',
-        ),
-        h(
-          NPopconfirm,
-          {
-            positiveText: '删除',
-            negativeText: '取消',
-            onPositiveClick: () => workspace.deleteFileNow(row),
-          },
-          {
-            trigger: () =>
-              h('a', { class: 'link-btn link-btn--danger' }, '删除'),
-            default: () => `确定删除「${row.file_name}」？此操作不可恢复。`,
-          },
-        ),
-      ]),
+    render: (row) => {
+      // 向量解析中（pending / processing）禁止重命名和移动，避免与后台
+      // ingest 线程并发写同一条记录
+      const parsing =
+        row.parse_status === 'pending' || row.parse_status === 'processing'
+      const disabledTip = '文件正在向量解析中，完成后再进行此操作'
+      return h(
+        'div',
+        { class: 'row-actions', style: { justifyContent: 'center' } },
+        [
+          h(
+            'a',
+            {
+              class: 'link-btn link-btn--primary',
+              onClick: () => void workspace.openPreview(row),
+            },
+            '预览',
+          ),
+          h(
+            'a',
+            {
+              class: [
+                'link-btn',
+                parsing ? 'link-btn--disabled' : 'link-btn--primary',
+              ],
+              title: parsing ? disabledTip : undefined,
+              onClick: () => {
+                if (parsing) return
+                workspace.openRenameFile(row)
+              },
+            },
+            '重命名',
+          ),
+          h(
+            'a',
+            {
+              class: [
+                'link-btn',
+                parsing ? 'link-btn--disabled' : 'link-btn--primary',
+              ],
+              title: parsing ? disabledTip : undefined,
+              onClick: () => {
+                if (parsing) return
+                workspace.openMoveFile(row)
+              },
+            },
+            '移动',
+          ),
+          h(
+            NPopconfirm,
+            {
+              positiveText: '删除',
+              negativeText: '取消',
+              onPositiveClick: () => workspace.deleteFileNow(row),
+            },
+            {
+              trigger: () =>
+                h('a', { class: 'link-btn link-btn--danger' }, '删除'),
+              default: () => `确定删除「${row.file_name}」？此操作不可恢复。`,
+            },
+          ),
+        ],
+      )
+    },
   },
 ]
 </script>
@@ -948,5 +972,15 @@ const columns: DataTableColumns<KnowledgeFile> = [
 }
 .file-table .link-btn--danger {
   color: #ef4444;
+}
+.file-table .link-btn--disabled {
+  color: #b1b5bd;
+  cursor: not-allowed;
+}
+.file-table .link-btn--disabled:hover {
+  opacity: 1;
+}
+.file-table .link-btn--disabled:active {
+  transform: none;
 }
 </style>

@@ -41,6 +41,8 @@ export interface ChatMessage {
   created_at: string
   /** 前端流式输出标记，后端不返回 */
   streaming?: boolean
+  /** 证据阅读（thinking）积累文本，后端不返回 */
+  thinkingContent?: string
 }
 
 /* ------------------------------ 普通 CRUD ------------------------------ */
@@ -60,6 +62,11 @@ export async function deleteThread(threadId: string): Promise<ChatSession> {
   return res.data
 }
 
+export async function deleteMessage(messageId: string): Promise<ChatMessage> {
+  const res = await request.delete<{ data: ChatMessage }>(`/chat/messages/${messageId}`)
+  return res.data
+}
+
 export async function listMessages(threadId: string): Promise<ChatMessage[]> {
   const res = await request.get<{ data: ChatMessage[] }>(
     `/chat/threads/${threadId}/messages`,
@@ -71,6 +78,7 @@ export async function listMessages(threadId: string): Promise<ChatMessage[]> {
 
 export interface StreamAskCallbacks {
   onCitations?: (citations: ChatCitation[]) => void
+  onThinkingToken?: (delta: string) => void
   onToken?: (delta: string) => void
   onDone?: (payload: { message_id: string; title: string }) => void
   onError?: (message: string) => void
@@ -178,6 +186,9 @@ function dispatchEvent(rawEvent: string, callbacks: StreamAskCallbacks) {
   switch (eventName) {
     case 'citations':
       callbacks.onCitations?.(data.citations || [])
+      break
+    case 'thinking_token':
+      if (typeof data.delta === 'string') callbacks.onThinkingToken?.(data.delta)
       break
     case 'token':
       if (typeof data.delta === 'string') callbacks.onToken?.(data.delta)

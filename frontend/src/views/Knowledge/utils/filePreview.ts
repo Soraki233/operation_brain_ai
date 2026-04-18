@@ -215,11 +215,12 @@ export async function buildPreviewFromBlob(
 
 /** 把单个 SheetJS worksheet 扁平成 { columns, rows } 二维结构。
  *
- * - 展开合并单元格：把合并块左上角的值广播到整个 merge 区域，
- *   避免虚拟滚动到下半部分时一列全空；
- * - 自动识别表头行：在前 5 行里挑非空单元格最多的那一行当表头，
- *   兼容"第一行是大标题 / 第二行才是真实列名"的 Excel；
- * - Date 单元格格式化成 yyyy-MM-dd(HH:mm:ss)，避免 44927 这种序列号或 ISO 长串。
+ * - 展开合并单元格：把合并块左上角的值广播到整个 merge 区域；
+ * - 自动识别表头深度：扫描前 6 行，从第一个"数字占比 >= 50%"的行开始视为
+ *   数据行，之前的都是表头；处理得了 1~3 行的多级表头；
+ * - 多级表头按列纵向拼接成 "博总线 · 正向有功总 · (函数)"，同列同文本去重；
+ * - Date 单元格：纯时间值（Excel 基准日 1899-12-30）只显示 HH:MM，
+ *   正常日期显示 yyyy-MM-dd(HH:mm:ss)。
  */
 function parseSheetToGrid(
   ws: XLSX.WorkSheet,
@@ -232,7 +233,9 @@ function parseSheetToGrid(
   })
   if (!aoa.length) return { columns: [], rows: [] }
 
-  // 1) 展开合并单元格
+  // 1) 展开合并单元格：把合并块左上角的值广播到整个 merge 区域。
+  //    对于"大标题"横向合并的表头，这一步让每列的前几行都持有分组名，
+  //    后面做多级表头合并时就能直接纵向扫。
   const merges = ws['!merges']
   if (merges && merges.length) {
     for (const m of merges) {
@@ -255,34 +258,24 @@ function parseSheetToGrid(
   const maxCols = aoa.reduce((m, row) => Math.max(m, row?.length || 0), 0)
   if (!maxCols) return { columns: [], rows: [] }
 
-  // 2) 选表头：前 5 行里非空单元格最多的行
-  const probe = Math.min(5, aoa.length)
-  let headerIdx = 0
-  let headerFill = -1
-  for (let i = 0; i < probe; i++) {
-    const r = aoa[i] || []
-    let fill = 0
-    for (let c = 0; c < maxCols; c++) {
-      const v = r[c]
-      if (v !== null && v !== undefined && String(v).trim() !== '') fill++
-    }
-    if (fill > headerFill) {
-      headerFill = fill
-      headerIdx = i
-    }
-  }
+  // 2) 检测表头深度：从前 6 行里找第一个"数值单元格占比 ≥ 50%"的行，
+  //    视为数据行起点；之前的都算表头。
+  const headerDepth = detectHeaderDepth(aoa, maxCols)
 
-  // 3) 生成 columns（保持原始表头名，允许重复）
-  const headerRow = aoa[headerIdx] || []
+  // 3) 生成多级表头：每列纵向拼接 headerDepth 行的值，去重、去空
   const columns: string[] = []
   for (let c = 0; c < maxCols; c++) {
-    const label = formatCellValue(headerRow[c])
-    columns.push(label || `列${c + 1}`)
+    const parts: string[] = []
+    for (let r = 0; r < headerDepth; r++) {
+      const v = formatCellValue(aoa[r]?.[c])
+      if (v && !parts.includes(v)) parts.push(v)
+    }
+    columns.push(parts.join(' · ') || `列${c + 1}`)
   }
 
   // 4) 生成 rows：表头之后的所有行
   const rows: string[][] = []
-  for (let i = headerIdx + 1; i < aoa.length; i++) {
+  for (let i = headerDepth; i < aoa.length; i++) {
     const src = aoa[i] || []
     const row: string[] = new Array(maxCols)
     let anyFilled = false
@@ -297,25 +290,48 @@ function parseSheetToGrid(
   return { columns, rows }
 }
 
+/** 前 6 行里第一个 "数字单元格占比 ≥ 50%" 的行 → 视为数据行起点 */
+function detectHeaderDepth(aoa: unknown[][], maxCols: number): number {
+  const probe = Math.min(6, aoa.length)
+  for (let i = 0; i < probe; i++) {
+    const row = aoa[i] || []
+    let nonEmpty = 0
+    let numeric = 0
+    for (let c = 0; c < maxCols; c++) {
+      const v = row[c]
+      if (v === null || v === undefined || String(v).trim() === '') continue
+      nonEmpty++
+      if (typeof v === 'number' && !Number.isNaN(v)) numeric++
+    }
+    if (!nonEmpty) continue
+    if (numeric / nonEmpty >= 0.5) return Math.max(1, i)
+  }
+  return 1
+}
+
 /** 单元格值统一成字符串（日期 / 数字做可读化处理） */
 function formatCellValue(v: unknown): string {
   if (v === null || v === undefined) return ''
   if (v instanceof Date) {
     const y = v.getFullYear()
-    const mo = String(v.getMonth() + 1).padStart(2, '0')
-    const d = String(v.getDate()).padStart(2, '0')
+    const mo = v.getMonth() + 1
+    const d = v.getDate()
     const hh = v.getHours()
     const mm = v.getMinutes()
     const ss = v.getSeconds()
-    if (hh === 0 && mm === 0 && ss === 0) return `${y}-${mo}-${d}`
-    return `${y}-${mo}-${d} ${String(hh).padStart(2, '0')}:${String(mm).padStart(
-      2,
-      '0',
-    )}:${String(ss).padStart(2, '0')}`
+    const pad = (n: number) => String(n).padStart(2, '0')
+    // Excel "纯时间" 单元格：JS Date 基准日就是 1899-12-30。
+    // 这里统一把 <= 1900 年的日期视为"只有时间"，只展示 HH:MM(:SS)。
+    if (y <= 1900) {
+      if (ss === 0) return `${pad(hh)}:${pad(mm)}`
+      return `${pad(hh)}:${pad(mm)}:${pad(ss)}`
+    }
+    const dateStr = `${y}-${pad(mo)}-${pad(d)}`
+    if (hh === 0 && mm === 0 && ss === 0) return dateStr
+    return `${dateStr} ${pad(hh)}:${pad(mm)}:${pad(ss)}`
   }
   if (typeof v === 'number') {
     if (Number.isInteger(v)) return String(v)
-    // 去掉无意义的长尾 0，又不破坏精度
     return Number(v.toFixed(6)).toString()
   }
   return String(v).trim()

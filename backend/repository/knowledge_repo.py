@@ -266,6 +266,15 @@ class KnowledgeRepo:
         if not has_knowledge_permission:
             raise HTTPException(status_code=400, detail="您没有该权限")
 
+        # 向量解析过程中不允许重命名 / 移动：
+        # 防止重命名和移动的操作与后台 ingest 线程同时写同一条记录导致数据错乱，
+        # 同时给用户一个明确提示"当前正在处理，请稍后再试"。
+        if knowledge_file.parse_status in ("pending", "processing"):
+            raise HTTPException(
+                status_code=400,
+                detail="文件正在向量解析中，完成后再进行重命名或移动操作",
+            )
+
         # 1) 目标文件夹：move_to_root 优先，其次 folder_id；未传则保持原值
         target_folder_id = knowledge_file.folder_id
         if data.move_to_root:

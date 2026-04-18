@@ -140,6 +140,27 @@ class ChatRepo:
         return list(result.scalars().all())
 
     @staticmethod
+    async def delete_message(
+        message_id: str, user: User, db: AsyncSession
+    ) -> ChatMessageModel:
+        """软删单条消息，同时校验归属（必须属于该用户的某个会话）。"""
+        result = await db.execute(
+            select(ChatMessageModel).where(
+                ChatMessageModel.id == message_id,
+                ChatMessageModel.is_deleted == 0,
+            )
+        )
+        message = result.scalar_one_or_none()
+        if not message:
+            raise HTTPException(status_code=400, detail="消息不存在")
+        # 校验消息所属会话的归属
+        await ChatRepo.get_thread(message.thread_id, user, db)
+        message.is_deleted = 1
+        await db.commit()
+        await db.refresh(message)
+        return message
+
+    @staticmethod
     async def get_recent_messages(
         thread_id: str,
         db: AsyncSession,

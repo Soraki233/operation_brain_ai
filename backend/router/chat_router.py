@@ -5,6 +5,7 @@ from typing import AsyncIterator
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
+from core.settings import settings
 from core.deps import get_current_user
 from db.models.user import User
 from db.session import AsyncSession, AsyncSessionLocal, get_db
@@ -97,6 +98,19 @@ async def list_messages(
     )
 
 
+# ----------------------------- 消息操作 -----------------------------
+
+
+@chat_router.delete("/messages/{message_id}", summary="删除单条消息（软删）")
+async def delete_message(
+    message_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    message = await ChatRepo.delete_message(message_id, current_user, db)
+    return success_response(data=_message_to_schema(message))
+
+
 # --------------------------------- 问答（SSE） ---------------------------------
 
 
@@ -156,14 +170,27 @@ async def ask(
                     thread.id, current_user, session
                 )
 
+                # 步骤 1+2：检索候选 + 扩展上下文
                 citations, context_text = await agent.retrieve(
                     question, kb_ids=kb_ids, db=session
                 )
                 yield _sse_event("citations", {"citations": citations})
 
+                # 步骤 3：阅读证据（流式 thinking，可通过配置开关关闭）
+                evidence_summary = ""
+                if context_text and settings.AGENT_EVIDENCE_READ_ENABLED:
+                    evidence_buffer: list[str] = []
+                    async for thinking_token in agent.astream_evidence(
+                        question, context_text
+                    ):
+                        evidence_buffer.append(thinking_token)
+                        yield _sse_event("thinking_token", {"delta": thinking_token})
+                    evidence_summary = "".join(evidence_buffer)
+
+                # 步骤 4：回答（携带证据摘要）
                 buffer: list[str] = []
                 async for token in agent.astream_answer(
-                    history_all, context_text, question
+                    history_all, context_text, question, evidence_summary=evidence_summary
                 ):
                     buffer.append(token)
                     yield _sse_event("token", {"delta": token})

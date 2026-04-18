@@ -1,14 +1,43 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { NCollapse, NCollapseItem, NTag, NEllipsis, NIcon } from 'naive-ui'
+import { NCollapse, NCollapseItem, NTag, NEllipsis, NIcon, NPopconfirm } from 'naive-ui'
 import type { ChatMessage } from '@/api/chat'
 import { renderMarkdown } from '@/utils/markdown'
 
 const props = defineProps<{
   msg: ChatMessage
+  /** 父组件正在执行删除动效 */
+  deleting?: boolean
+}>()
+
+const emit = defineEmits<{
+  (e: 'delete', id: string): void
 }>()
 
 const rendered = computed(() => renderMarkdown(props.msg.content || ''))
+
+/* -------------------- 证据阅读（thinking）折叠 -------------------- */
+const hasThinking = computed(
+  () => props.msg.role === 'assistant' && !!props.msg.thinkingContent,
+)
+const renderedThinking = computed(() =>
+  renderMarkdown(props.msg.thinkingContent || ''),
+)
+
+// streaming 过程中展开，答案完成后自动折叠
+const thinkingExpanded = ref(true)
+watch(
+  () => props.msg.streaming,
+  (streaming) => {
+    if (streaming === false && props.msg.thinkingContent) {
+      // 答案流式完成 → 自动折叠思考过程
+      thinkingExpanded.value = false
+    }
+  },
+)
+function toggleThinking() {
+  thinkingExpanded.value = !thinkingExpanded.value
+}
 
 const createdAt = computed(() => {
   const raw = props.msg.created_at
@@ -78,7 +107,7 @@ const showStreamTimer = computed(
 </script>
 
 <template>
-  <div :class="['message-row', msg.role]">
+  <div :class="['message-row', msg.role, { 'message-row--deleting': deleting }]">
     <div class="message-avatar">
       <div v-if="msg.role === 'assistant'" class="avatar ai-avatar">
         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
@@ -102,6 +131,28 @@ const showStreamTimer = computed(
         <span class="stream-timer__label">思考中</span>
         <span class="stream-timer__dot">·</span>
         <span class="stream-timer__time">{{ elapsedLabel }}</span>
+      </div>
+
+      <!-- 证据阅读（thinking）折叠卡片 -->
+      <div v-if="hasThinking" class="thinking-block">
+        <button class="thinking-header" @click="toggleThinking">
+          <NIcon :size="13" class="thinking-icon" :class="{ 'thinking-icon--spin': msg.streaming }">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />
+            </svg>
+          </NIcon>
+          <span class="thinking-title">
+            {{ msg.streaming ? '正在阅读证据…' : '已阅读证据' }}
+          </span>
+          <NIcon :size="12" class="thinking-toggle" :class="{ 'thinking-toggle--open': thinkingExpanded }">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z" />
+            </svg>
+          </NIcon>
+        </button>
+        <Transition name="thinking-slide">
+          <div v-show="thinkingExpanded" class="thinking-content markdown-body" v-html="renderedThinking" />
+        </Transition>
       </div>
 
       <!-- 流式且尚未产出内容：保留三点 typing 气泡 -->
@@ -152,6 +203,29 @@ const showStreamTimer = computed(
       </div>
 
       <div class="message-time">{{ createdAt }}</div>
+
+      <!-- 删除按钮：悬浮时出现，点击二次确认后执行 -->
+      <NPopconfirm
+        v-if="!msg.streaming"
+        positive-text="删除"
+        negative-text="取消"
+        @positive-click="emit('delete', msg.id)"
+      >
+        <template #trigger>
+          <button
+            class="msg-delete-btn"
+            title="删除消息"
+            :disabled="deleting"
+          >
+            <NIcon :size="13">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+              </svg>
+            </NIcon>
+          </button>
+        </template>
+        确定删除这条消息？
+      </NPopconfirm>
     </div>
   </div>
 </template>
@@ -327,6 +401,80 @@ const showStreamTimer = computed(
   30% { transform: translateY(-6px); opacity: 1; }
 }
 
+/* 证据阅读（thinking）卡片 */
+.thinking-block {
+  margin-bottom: 8px;
+  border: 1px solid @border-color;
+  border-radius: @border-radius-md;
+  background: @bg-color;
+  overflow: hidden;
+  font-size: 13px;
+}
+
+.thinking-header {
+  all: unset;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  color: @text-secondary;
+  user-select: none;
+
+  &:hover {
+    background: fade(@primary-blue, 5%);
+  }
+}
+
+.thinking-icon {
+  color: @primary-blue;
+  flex-shrink: 0;
+
+  &--spin {
+    animation: streamTimerSpin 2.4s linear infinite;
+  }
+}
+
+.thinking-title {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 500;
+  color: @text-secondary;
+}
+
+.thinking-toggle {
+  color: @text-placeholder;
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+
+  &--open {
+    transform: rotate(180deg);
+  }
+}
+
+.thinking-content {
+  padding: 10px 14px 12px;
+  border-top: 1px solid @border-color;
+  font-size: 12.5px;
+  color: @text-secondary;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.thinking-slide-enter-active,
+.thinking-slide-leave-active {
+  transition: max-height 0.25s ease, opacity 0.2s ease;
+  max-height: 320px;
+  overflow: hidden;
+}
+.thinking-slide-enter-from,
+.thinking-slide-leave-to {
+  max-height: 0;
+  opacity: 0;
+}
+
 .citations-block {
   margin-top: 8px;
   padding: 0 14px;
@@ -427,6 +575,61 @@ const showStreamTimer = computed(
   word-break: break-all;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+/* 删除按钮 */
+.message-body {
+  position: relative;
+}
+
+.msg-delete-btn {
+  all: unset;
+  position: absolute;
+  bottom: 22px;
+  right: -32px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: @text-placeholder;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+
+  &:hover {
+    color: #ef4444;
+    background: fade(#ef4444, 10%);
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    color: @text-placeholder;
+  }
+}
+
+/* user 气泡：按钮放左侧 */
+.message-row.user .msg-delete-btn {
+  right: auto;
+  left: -32px;
+}
+
+/* 悬浮整行时显示删除按钮 */
+.message-row:hover .msg-delete-btn {
+  opacity: 1;
+}
+
+/* 删除消失动效：缩小 + 淡出 */
+.message-row--deleting {
+  animation: msgDeleteOut 0.3s ease forwards;
+  pointer-events: none;
+}
+
+@keyframes msgDeleteOut {
+  0%   { opacity: 1; transform: scaleY(1) translateX(0); max-height: 200px; }
+  40%  { opacity: 0.5; transform: scaleY(0.8) translateX(0); }
+  100% { opacity: 0; transform: scaleY(0); max-height: 0; margin: 0; overflow: hidden; }
 }
 </style>
 

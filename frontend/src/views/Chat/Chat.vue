@@ -111,6 +111,31 @@ async function deleteSession(id: string) {
   }
 }
 
+/* ----------------------------- 删除单条消息 ----------------------------- */
+
+/** 正在删除（动效）的消息 id 集合 */
+const deletingIds = ref<Set<string>>(new Set())
+
+async function deleteMsg(msgId: string) {
+  if (deletingIds.value.has(msgId)) return
+  const sessionId = activeSessionId.value
+  // 标记动效中
+  deletingIds.value = new Set([...deletingIds.value, msgId])
+  try {
+    await chatApi.deleteMessage(msgId)
+    // 动效结束后从列表移除（等 CSS transition 跑完再删数据）
+    setTimeout(() => {
+      const list = messagesMap.value[sessionId]
+      if (list) {
+        messagesMap.value[sessionId] = list.filter((m) => m.id !== msgId)
+      }
+      deletingIds.value = new Set([...deletingIds.value].filter((id) => id !== msgId))
+    }, 320)
+  } catch {
+    deletingIds.value = new Set([...deletingIds.value].filter((id) => id !== msgId))
+  }
+}
+
 /* -------------------------------- 发送消息 ------------------------------- */
 
 function sendSuggestedPrompt(text: string) {
@@ -148,6 +173,7 @@ async function handleSend() {
       citations: [],
       created_at: now,
       streaming: true,
+      thinkingContent: '',
     },
   )
   // ref 在 push 时会把对象包成 reactive Proxy；必须用数组中的引用来修改，
@@ -161,6 +187,9 @@ async function handleSend() {
   currentStream = chatApi.streamAsk(sessionId, content, {
     onCitations: (citations) => {
       assistantMsg.citations = citations
+    },
+    onThinkingToken: (delta) => {
+      assistantMsg.thinkingContent = (assistantMsg.thinkingContent ?? '') + delta
     },
     onToken: (delta) => {
       assistantMsg.content += delta
@@ -209,7 +238,13 @@ async function handleSend() {
           @pick-suggestion="(text) => (inputValue = text)"
         />
         <TransitionGroup v-else name="msg-appear">
-          <ChatMessageRow v-for="msg in currentMessages" :key="msg.id" :msg="msg" />
+          <ChatMessageRow
+            v-for="msg in currentMessages"
+            :key="msg.id"
+            :msg="msg"
+            :deleting="deletingIds.has(msg.id)"
+            @delete="deleteMsg"
+          />
         </TransitionGroup>
       </NScrollbar>
 
